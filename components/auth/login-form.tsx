@@ -327,17 +327,9 @@ export function LoginForm() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="w-full max-w-md space-y-6">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold">Sistema de Chat</h1>
-          <p className="text-gray-600 mt-2">Inicia sesión o crea una cuenta</p>
-        </div>
-
+    
         <Tabs defaultValue="login" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="login">Iniciar Sesión</TabsTrigger>
-            <TabsTrigger value="register">Registrarse</TabsTrigger>
-          </TabsList>
-
+        
           <TabsContent value="login">
             <Card>
               <CardHeader>
@@ -458,13 +450,7 @@ export function LoginForm() {
           </TabsContent>
         </Tabs>
 
-        <Alert>
-          {/* <AlertDescription>
-            <strong>Usuarios de prueba:</strong><br />
-            Cliente: usuario@example.com / 123456<br />
-            Operador: operador@example.com / 123456
-          </AlertDescription> */}
-        </Alert>
+
       </div>
     </div>
   )
