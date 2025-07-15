@@ -1,7 +1,5 @@
 "use client"
 
-import type React from "react"
-
 import { useState, useEffect, useRef } from "react"
 import { useSocket } from "@/hooks/use-socket"
 import { useAuth } from "@/components/providers/auth-provider"
@@ -36,18 +34,12 @@ export function ClientChat() {
   const { user, logout } = useAuth()
   const { toast } = useToast()
   const [messages, setMessages] = useState<Message[]>([])
-  const [chatState, setChatState] = useState<ChatState>({
-    id: null,
-    status: "disconnected",
-  })
+  const [chatState, setChatState] = useState<ChatState>({ id: null, status: "disconnected" })
   const [isTyping, setIsTyping] = useState(false)
   const [botThinking, setBotThinking] = useState(false)
   const [inputMessage, setInputMessage] = useState("")
   const [showRatingDialog, setShowRatingDialog] = useState(false)
-  const [finishedChatData, setFinishedChatData] = useState<{
-    chatId: string
-    operatorId: string
-  } | null>(null)
+  const [finishedChatData, setFinishedChatData] = useState<{ chatId: string; operatorId: string } | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const clientId = useRef(user?.id || `client-${Math.random().toString(36).substr(2, 9)}`)
@@ -57,7 +49,7 @@ export function ClientChat() {
     serverUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:3002",
   })
 
-  // Auto scroll to bottom
+  // Scroll automático al final
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
@@ -66,26 +58,65 @@ export function ClientChat() {
     scrollToBottom()
   }, [messages])
 
+  // Recuperar chatId desde localStorage al iniciar la app
+  useEffect(() => {
+    const storedChatId = localStorage.getItem("client-chat-id")
+    if (storedChatId && !chatState.id) {
+      console.log("🗃️ [CLIENT] Recuperando chatId desde localStorage:", storedChatId)
+      setChatState({ id: storedChatId, status: "active" })
+    }
+  }, [])
+
+  // Cargar historial mensajes vía REST API cuando se setea chatState.id y no hay mensajes cargados aún
+  useEffect(() => {
+    if (chatState.id && messages.length === 0) {
+      console.log("📦 [CLIENT] Recuperando historial vía REST API para:", chatState.id)
+      fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3002"}/chat/${chatState.id}/messages`)
+        .then((res) => res.json())
+        .then((data) => {
+          const historyMessages = data.map((msg: any) => ({
+            id: msg.id,
+            content: msg.content,
+            sender: msg.sender,
+            timestamp: new Date(msg.timestamp),
+            chatId: msg.chatId,
+            senderName:
+              msg.sender === "BOT"
+                ? "IA Assistant"
+                : msg.sender === "CLIENT"
+                ? "Tú"
+                : msg.sender === "OPERADOR"
+                ? "Especialista"
+                : "Sistema",
+          }))
+          setMessages(historyMessages)
+        })
+        .catch((err) => {
+          console.error("❌ [CLIENT] Error al recuperar historial:", err)
+        })
+    }
+  }, [chatState.id, messages.length])
+
+  // Conexión socket: registrar eventos y lógica
   useEffect(() => {
     if (!socket) return
 
-    // Eventos del socket
+    // Al tener chatState.id, unirnos a la sala para recibir mensajes y eventos
+    if (chatState.id) {
+      socket.emit("joinChat", { chatId: chatState.id })
+      console.log(`🔗 [CLIENT] Uniéndome a la sala del chat ${chatState.id}`)
+    }
+
     socket.on("chatCreated", (data) => {
       console.log("🆕 [CLIENT] Chat creado:", data)
       setChatState({ id: data.id, status: "active" })
+      localStorage.setItem("client-chat-id", data.id)
       socket.emit("joinChat", { chatId: data.id })
-      toast({
-        title: "Chat iniciado",
-        description: "¡Tu chat con la IA ha comenzado!",
-      })
-    })
-
-    socket.on("joinedChat", (data) => {
-      console.log("✅ [CLIENT] Unido al chat:", data)
+      toast({ title: "Chat iniciado", description: "¡Tu chat con la IA ha comenzado!" })
+      setMessages([]) // limpio mensajes al iniciar nuevo chat
     })
 
     socket.on("newMessage", (message) => {
-      console.log("💬 [CLIENT] Nuevo mensaje:", message)
       setMessages((prev) => [
         ...prev,
         {
@@ -94,36 +125,23 @@ export function ClientChat() {
           sender: message.senderType,
           timestamp: new Date(message.timestamp),
           chatId: message.chatId,
-        senderName: message.senderName || (message.senderType === "BOT"
-  ? "IA Assistant"
-  : message.senderType === "CLIENT"
-  ? "Tú"
-  : `Especialista ${message.userId}`),
+          senderName:
+            message.senderName ||
+            (message.senderType === "BOT"
+              ? "IA Assistant"
+              : message.senderType === "CLIENT"
+              ? "Tú"
+              : `Especialista ${message.userId}`),
         },
       ])
       setBotThinking(false)
     })
 
-    socket.on("botThinking", (data) => {
-      console.log("🤖 [CLIENT] Bot pensando:", data)
+    socket.on("botThinking", () => {
       setBotThinking(true)
     })
 
-    socket.on("chatHistory", (data) => {
-      console.log("📚 [CLIENT] Historial recibido:", data)
-      const historyMessages = data.messages.map((msg: any) => ({
-        id: msg.id,
-        content: msg.content,
-        sender: msg.sender,
-        timestamp: new Date(msg.timestamp),
-        chatId: msg.chatId,
-        senderName: msg.senderName,
-      }))
-      setMessages(historyMessages)
-    })
-
     socket.on("specialistAssigned", (data) => {
-      console.log("🎧 [CLIENT] Especialista asignado:", data)
       setChatState((prev) => ({
         ...prev,
         status: "with-specialist",
@@ -147,23 +165,13 @@ export function ClientChat() {
     })
 
     socket.on("chatFinished", (data) => {
-      console.log("✅ [CLIENT] Chat finalizado:", data)
       setChatState((prev) => ({ ...prev, status: "finished" }))
-      setFinishedChatData({
-        chatId: data.chatId,
-        operatorId: data.operatorId,
-      })
-      setTimeout(() => {
-        setShowRatingDialog(true)
-      }, 1000)
-      toast({
-        title: "Chat finalizado",
-        description: "El chat ha sido finalizado. ¡Gracias por contactarnos!",
-      })
+      setFinishedChatData({ chatId: data.chatId, operatorId: data.operatorId })
+      setTimeout(() => setShowRatingDialog(true), 1000)
+      toast({ title: "Chat finalizado", description: "El chat ha sido finalizado." })
     })
 
     socket.on("ratingSubmitted", (data) => {
-      console.log("⭐ [CLIENT] Calificación enviada:", data)
       setMessages((prev) => [
         ...prev,
         {
@@ -182,7 +190,6 @@ export function ClientChat() {
     })
 
     socket.on("chatInQueue", (data) => {
-      console.log("⏳ [CLIENT] Chat en cola:", data)
       setChatState((prev) => ({ ...prev, status: "in-queue" }))
       setMessages((prev) => [
         ...prev,
@@ -198,7 +205,6 @@ export function ClientChat() {
     })
 
     socket.on("userTyping", (data) => {
-      console.log("⌨️ [CLIENT] Usuario escribiendo:", data)
       if (data.userId !== clientId.current) {
         setIsTyping(data.isTyping)
       }
@@ -215,10 +221,8 @@ export function ClientChat() {
 
     return () => {
       socket.off("chatCreated")
-      socket.off("joinedChat")
       socket.off("newMessage")
       socket.off("botThinking")
-      socket.off("chatHistory")
       socket.off("specialistAssigned")
       socket.off("chatFinished")
       socket.off("ratingSubmitted")
@@ -226,63 +230,37 @@ export function ClientChat() {
       socket.off("userTyping")
       socket.off("error")
     }
-  }, [socket, toast])
+  }, [socket, chatState.id, toast])
 
   const handleCreateChat = () => {
     if (!socket || !isConnected) {
-      toast({
-        title: "Error de conexión",
-        description: "No se puede conectar al servidor",
-        variant: "destructive",
-      })
+      toast({ title: "Error de conexión", description: "No se puede conectar al servidor", variant: "destructive" })
       return
     }
 
-    // Reset estados para nuevo chat
     setMessages([])
     setFinishedChatData(null)
     setChatState({ id: null, status: "disconnected" })
+    localStorage.removeItem("client-chat-id") // limpio chat guardado
 
-    console.log("🚀 [CLIENT] Creando nuevo chat...")
     socket.emit("createChat")
   }
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault()
+    if (!inputMessage.trim() || !socket || !chatState.id || !isConnected) return
 
-    if (!inputMessage.trim() || !socket || !chatState.id || !isConnected) {
-      return
-    }
-
-    if (chatState.status === "finished") {
-      toast({
-        title: "Chat finalizado",
-        description: "Este chat ha sido finalizado. Crea un nuevo chat para continuar.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    console.log("📤 [CLIENT] Enviando mensaje:", inputMessage)
     socket.emit("sendMessage", {
       userId: clientId.current,
       chatId: chatState.id,
-      content: inputMessage,
+      content: inputMessage.trim(),
     })
-
     setInputMessage("")
   }
 
   const handleRatingSubmit = (ratingData: any) => {
     if (!socket || !finishedChatData) return
-
-    const fullRatingData = {
-      ...ratingData,
-      clientId: clientId.current,
-    }
-
-    console.log("⭐ [CLIENT] Enviando calificación:", fullRatingData)
-    socket.emit("rateChat", fullRatingData)
+    socket.emit("rateChat", { ...ratingData, clientId: clientId.current })
     setShowRatingDialog(false)
   }
 
@@ -318,25 +296,21 @@ export function ClientChat() {
         </div>
         <div className="flex items-center space-x-2">
           {getStatusBadge()}
-          <Button variant="outline" size="sm" onClick={logout}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              logout()
+              localStorage.removeItem("client-chat-id") // limpiar al cerrar sesión
+            }}
+          >
             <LogOut className="h-4 w-4 mr-2" />
             Salir
           </Button>
         </div>
       </div>
 
-      {/* Connection Status */}
-      <div className="bg-white border-b px-4 py-2">
-        <div className="flex items-center space-x-2">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`} />
-          <span className="text-sm text-gray-600">{isConnected ? "Conectado" : "Desconectado"}</span>
-          {chatState.operatorName && (
-            <span className="text-sm text-blue-600">• Especialista: {chatState.operatorName}</span>
-          )}
-        </div>
-      </div>
-
-      {/* Chat Area */}
+      {/* Chat */}
       <div className="flex-1 flex flex-col">
         {!chatState.id ? (
           <div className="flex-1 flex items-center justify-center">
@@ -350,13 +324,11 @@ export function ClientChat() {
                 <Button onClick={handleCreateChat} disabled={!isConnected} className="w-full" size="lg">
                   {!isConnected ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Conectando...
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Conectando...
                     </>
                   ) : (
                     <>
-                      <MessageCircle className="mr-2 h-4 w-4" />
-                      Iniciar Chat
+                      <MessageCircle className="mr-2 h-4 w-4" /> Iniciar Chat
                     </>
                   )}
                 </Button>
@@ -365,7 +337,6 @@ export function ClientChat() {
           </div>
         ) : (
           <>
-            {/* Messages */}
             <ScrollArea className="flex-1 p-4">
               <div className="space-y-4">
                 {messages.map((message) => (
@@ -376,42 +347,25 @@ export function ClientChat() {
                 <div ref={messagesEndRef} />
               </div>
             </ScrollArea>
-
-            {/* Input */}
             <div className="bg-white border-t p-4">
               <form onSubmit={handleSendMessage} className="flex space-x-2">
                 <Input
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
-                  placeholder={
-                    chatState.status === "finished"
-                      ? "Chat finalizado - Crea un nuevo chat para continuar"
-                      : "Escribe tu mensaje... (prueba: 'quiero hablar con un humano')"
-                  }
+                  placeholder="Escribe tu mensaje..."
                   disabled={!isConnected || chatState.status === "finished"}
                   className="flex-1"
                 />
-                <Button
-                  type="submit"
-                  disabled={!isConnected || chatState.status === "finished" || !inputMessage.trim()}
-                >
+                <Button type="submit" disabled={!isConnected || !inputMessage.trim()}>
                   <Send className="h-4 w-4" />
                 </Button>
               </form>
-
-              {chatState.status === "finished" && (
-                <div className="mt-2 flex justify-center">
-                  <Button variant="outline" onClick={handleCreateChat}>
-                    💬 Nuevo Chat
-                  </Button>
-                </div>
-              )}
             </div>
           </>
         )}
       </div>
 
-      {/* Rating Dialog */}
+      {/* Rating dialog */}
       {showRatingDialog && finishedChatData && (
         <RatingDialog
           isOpen={showRatingDialog}
