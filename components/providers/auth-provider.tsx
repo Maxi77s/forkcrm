@@ -8,13 +8,20 @@ interface User {
   email: string
   role: "CLIENT" | "OPERADOR" | "ADMIN"
 }
+interface RegisterBody {
+  name: string;
+  email: string;
+  password: string;
+  role: string;
+ 
+}
 
 interface AuthContextType {
   user: User | null
   token: string | null
   isLoading: boolean
   login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string, role: string, name?: string) => Promise<void>
+  register: (name: string,email: string, password: string, role: string) => Promise<void>
   logout: () => void
   isTokenValid: () => boolean
   refreshToken: () => Promise<void>
@@ -160,15 +167,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("user", JSON.stringify(userData))
   }
 
-  const register = async (email: string, password: string, role: string, name?: string) => {
+  const register = async (name: string, email: string, password: string, role: string) => {
     const endpoint = role === "OPERADOR" ? "/operators" : "/auth/register"
 
-    const body = {
-      email,
-      password,
-      role,
-      name: name || email.split("@")[0], // fallback si no se pasa explícitamente
-    }
+    const body: RegisterBody = {
+      name,
+  email,
+  password,
+  role,
+};
+
+
 
     const response = await fetch(`${getApiUrl()}${endpoint}`, {
       method: "POST",

@@ -22,6 +22,8 @@ interface Message {
   timestamp: Date
   chatId: string
   senderName?: string
+   type: "TEXT" | "IMAGE"
+  imageUrl?: string
 }
 
 interface ChatState {
@@ -82,12 +84,14 @@ export function ClientChat() {
             chatId: msg.chatId,
             senderName:
               msg.sender === "BOT"
-                ? "IA Assistant"
+                ? "DepilBot"
                 : msg.sender === "CLIENT"
                 ? "Tú"
                 : msg.sender === "OPERADOR"
                 ? "Especialista"
                 : "Sistema",
+                type: msg.type || "TEXT", // 👈 asegurate de que esto exista
+  imageUrl: msg.imageUrl || undefined,
           }))
           setMessages(historyMessages)
         })
@@ -119,20 +123,16 @@ export function ClientChat() {
     socket.on("newMessage", (message) => {
       setMessages((prev) => [
         ...prev,
-        {
-          id: message.id,
-          content: message.content,
-          sender: message.senderType,
-          timestamp: new Date(message.timestamp),
-          chatId: message.chatId,
-          senderName:
-            message.senderName ||
-            (message.senderType === "BOT"
-              ? "IA Assistant"
-              : message.senderType === "CLIENT"
-              ? "Tú"
-              : `Especialista ${message.userId}`),
-        },
+       {
+      id: message.id,
+      content: message.content,
+      sender: message.senderType,
+      timestamp: new Date(message.timestamp),
+      chatId: message.chatId,
+      senderName: message.senderName || "Depilbot",
+      type: message.type || "TEXT", // 👈 agregá esto
+      imageUrl: message.imageUrl || undefined,
+    },
       ])
       setBotThinking(false)
     })
@@ -156,6 +156,7 @@ export function ClientChat() {
           timestamp: new Date(),
           chatId: data.chatId,
           senderName: "Sistema",
+          type: "TEXT",
         },
       ])
       toast({
@@ -181,6 +182,7 @@ export function ClientChat() {
           timestamp: new Date(data.timestamp),
           chatId: data.chatId,
           senderName: "Sistema",
+          type: "TEXT",
         },
       ])
       toast({
@@ -200,6 +202,7 @@ export function ClientChat() {
           timestamp: new Date(data.timestamp),
           chatId: data.chatId,
           senderName: "Sistema",
+          type: "TEXT",
         },
       ])
     })
@@ -340,9 +343,14 @@ export function ClientChat() {
             <ScrollArea className="flex-1 p-4">
               <div className="space-y-4">
                 {messages.map((message) => (
-                  <ChatMessage key={message.id} message={message} isOwn={message.sender === "CLIENT"} />
+                <ChatMessage
+    key={message.id}
+    message={message}
+    currentUserId={user?.id} // Asegurate de que esto tenga el userId correcto
+  />
+
                 ))}
-                {botThinking && <TypingIndicator name="IA Assistant" />}
+                {botThinking && <TypingIndicator name="Depilbot" />}
                 {isTyping && <TypingIndicator name="Especialista" />}
                 <div ref={messagesEndRef} />
               </div>

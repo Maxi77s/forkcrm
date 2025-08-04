@@ -22,6 +22,8 @@ interface Message {
   sender: "CLIENT" | "OPERADOR" | "BOT" | "SYSTEM"
   timestamp: Date
   senderName?: string
+     type: "TEXT" | "IMAGE"
+  imageUrl?: string
 }
 
 interface ChatInfo {
@@ -79,6 +81,8 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
         sender: data.sender === "CLIENT" ? "CLIENT" : data.sender === "AI" ? "BOT" : "OPERADOR",
           timestamp: new Date(data.timestamp),
           senderName: data.senderName,
+          type: data.type,
+          imageUrl: data.imageUrl,
         }
 
         setMessages((prev) => [...prev, newMessage])
@@ -153,7 +157,8 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
       sender: "OPERADOR",
       timestamp: new Date(),
       senderName: user?.email,
-    }
+      type: "TEXT",
+    };
 
     setMessages((prev) => [...prev, operatorMessage])
 
@@ -225,7 +230,12 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
               <DollarSign className="h-4 w-4" />
               <span>Confirmar Venta</span>
             </Button>
-            <Button variant="destructive" size="sm" onClick={finishChat} className="flex items-center space-x-1">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={finishChat}
+              className="flex items-center space-x-1"
+            >
               <X className="h-4 w-4" />
               <span>Finalizar</span>
             </Button>
@@ -237,7 +247,11 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
         <ScrollArea className="h-64 px-4 custom-scrollbar">
           <div className="space-y-4 py-4">
             {messages.map((message) => (
-              <ChatMessage key={message.id} message={message} />
+              <ChatMessage
+                key={message.id}
+                message={message}
+                currentUserId={"OPERADOR"}
+              />
             ))}
 
             {isTyping && <TypingIndicator />}
@@ -256,7 +270,11 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
               placeholder="Escribe tu respuesta..."
               className="flex-1"
             />
-            <Button onClick={sendMessage} disabled={!inputMessage.trim()} size="icon">
+            <Button
+              onClick={sendMessage}
+              disabled={!inputMessage.trim()}
+              size="icon"
+            >
               <Send className="h-4 w-4" />
             </Button>
           </div>
@@ -270,5 +288,5 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
         clientEmail={chatInfo.clientEmail}
       />
     </Card>
-  )
+  );
 }
