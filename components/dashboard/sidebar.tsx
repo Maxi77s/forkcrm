@@ -142,7 +142,7 @@ export function DashboardSidebar() {
             </Avatar>
             <div>
               <p className="text-sm font-medium">{user?.name || "Operador"}</p>
-              <p className="text-xs text-muted-foreground truncate max-w-[120px]">{user?.email}</p>
+              <p className="text-xs text-muted-foreground truncate max-w-[120px]">{user?.dni}</p>
             </div>
           </div>
           <Button variant="ghost" size="icon" onClick={logout}>

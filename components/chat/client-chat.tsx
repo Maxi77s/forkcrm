@@ -257,6 +257,7 @@ export function ClientChat() {
       userId: clientId.current,
       chatId: chatState.id,
       content: inputMessage.trim(),
+       clientName: user?.name ?? "Cliente"
     })
     setInputMessage("")
   }
@@ -294,7 +295,7 @@ export function ClientChat() {
           </Avatar>
           <div>
             <h1 className="font-semibold">Chat Cliente</h1>
-            <p className="text-sm text-gray-500">{user?.email}</p>
+            <p className="text-sm text-gray-500">{user?.name}</p>
           </div>
         </div>
         <div className="flex items-center space-x-2">

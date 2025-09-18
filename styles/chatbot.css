@@ -1,0 +1,65 @@
+/* Additional custom styles for the chatbot widget */
+
+.chatbot-widget {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif;
+}
+
+/* Smooth animations */
+.chatbot-fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Pulse animation for the floating button */
+.chatbot-pulse {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+}
+
+/* Mobile optimizations */
+@media (max-width: 640px) {
+  .chatbot-widget {
+    width: calc(100vw - 2rem);
+    right: 1rem;
+    left: 1rem;
+  }
+}
+
+/* Scrollbar styling */
+.chatbot-scrollarea::-webkit-scrollbar {
+  width: 4px;
+}
+
+.chatbot-scrollarea::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.chatbot-scrollarea::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 2px;
+}
+
+.chatbot-scrollarea::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

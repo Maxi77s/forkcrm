@@ -6,12 +6,12 @@ import { createContext, useContext, useState, useEffect } from "react"
 interface User {
   id: string
   name?: string
-  email: string
+  dni: number
   role: "CLIENT" | "OPERADOR" | "ADMIN"
 }
 interface RegisterBody {
   name: string;
-  email: string;
+  dni: number;
   password: string;
   role: string;
  
@@ -21,8 +21,8 @@ interface AuthContextType {
   user: User | null
   token: string | null
   isLoading: boolean
-  login: (email: string, password: string) => Promise<void>
-  register: (name: string,email: string, password: string, role: string) => Promise<void>
+  login: (dni: number, password: string) => Promise<void>
+  register: (name: string,dni: number, password: string, role: string) => Promise<void>
   logout: () => void
   isTokenValid: () => boolean
   refreshToken: () => Promise<void>
@@ -40,7 +40,7 @@ function isTokenExpired(token: string): boolean {
     const now = Date.now() / 1000
     return payload.exp < now
   } catch (error) {
-    console.error("❌ [AUTH] Error checking token expiration:", error)
+    console.error("❌ [AUTH] expired token", error)
     return true
   }
 }
@@ -136,44 +136,63 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(false)
   }, [])
 
-  const login = async (email: string, password: string) => {
-    const response = await fetch(`${getApiUrl()}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    })
+const login = async (dni: number, password: string) => {
+  console.log("🔐 [AUTH] Intentando login con:", { dni, passwordLength: password.length })
 
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.message || "Error en el login")
+  const response = await fetch(`${getApiUrl()}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dni, password }),
+  })
+
+  console.log("📤 [AUTH] Response status:", response.status)
+
+  if (!response.ok) {
+    let errorData
+    try {
+      errorData = await response.json()
+    } catch (err) {
+      console.error("❌ [AUTH] Error parseando JSON de error:", err)
     }
-
-    const data = await response.json()
-    const accessToken = data.access_token || data.token
-    if (!accessToken) throw new Error("No se recibió token")
-
-    const userData: User = {
-      id: data.user.id,
-      email: data.user.email,
-      role: data.user.role.toUpperCase() as User["role"],
-    }
-
-    clearAuth()
-    setUser(userData)
-    setToken(accessToken)
-
-    localStorage.setItem(`authToken-${userData.role}`, accessToken)
-    localStorage.setItem(`user-${userData.role}`, JSON.stringify(userData))
-    localStorage.setItem("token", accessToken)
-    localStorage.setItem("user", JSON.stringify(userData))
+    console.error("❌ [AUTH] Login falló:", errorData || "Unknown error")
+    throw new Error(errorData?.message || "Error en el login")
   }
 
-  const register = async (name: string, email: string, password: string, role: string) => {
+  const data = await response.json()
+  console.log("✅ [AUTH] Login exitoso, datos recibidos:", data)
+
+  const accessToken = data.access_token || data.token
+  if (!accessToken) {
+    console.error("❌ [AUTH] No se recibió token")
+    throw new Error("No se recibió token")
+  }
+
+  const userData: User = {
+    id: data.user.id,
+    name: data.user.name,
+    dni: data.user.dni,
+    role: data.user.role.toUpperCase() as User["role"],
+  }
+
+  clearAuth()
+  setUser(userData)
+  setToken(accessToken)
+
+  localStorage.setItem(`authToken-${userData.role}`, accessToken)
+  localStorage.setItem(`user-${userData.role}`, JSON.stringify(userData))
+  localStorage.setItem("token", accessToken)
+  localStorage.setItem("user", JSON.stringify(userData))
+
+  console.log("🎫 [AUTH] Token y usuario guardados correctamente")
+}
+
+
+  const register = async (name: string, dni: number, password: string, role: string) => {
     const endpoint = role === "OPERADOR" ? "/operators" : "/auth/register"
 
     const body: RegisterBody = {
       name,
-  email,
+  dni,
   password,
   role,
 };
@@ -197,7 +216,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const userData: User = {
       id: data.user.id,
-      email: data.user.email,
+      name: data.user.name,
+      dni: data.user.dni,
       role: data.user.role.toUpperCase() as User["role"],
     }
 
@@ -241,3 +261,16 @@ export function useAuth() {
   }
   return context
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
