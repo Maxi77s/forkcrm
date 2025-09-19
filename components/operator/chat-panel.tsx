@@ -28,7 +28,7 @@ interface Message {
 
 interface ChatInfo {
   id: string
-  clientEmail: string
+  clientDni: number
   status: string
   createdAt: Date
   operatorName?: string
@@ -156,7 +156,7 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
       content: inputMessage,
       sender: "OPERADOR",
       timestamp: new Date(),
-      senderName: user?.email,
+      senderName: user?.name || "Operador",
       type: "TEXT",
     };
 
@@ -211,7 +211,7 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
           <div className="flex items-center space-x-3">
             <User className="h-5 w-5" />
             <div>
-              <CardTitle className="text-lg">{chatInfo.clientEmail}</CardTitle>
+              <CardTitle className="text-lg">{chatInfo.clientDni}</CardTitle>
               <div className="flex items-center space-x-2 text-sm text-gray-500">
                 <Clock className="h-4 w-4" />
                 <span>Iniciado: {formatTime(chatInfo.createdAt)}</span>
@@ -285,7 +285,7 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
         open={showSaleDialog}
         onOpenChange={setShowSaleDialog}
         chatId={chatId}
-        clientEmail={chatInfo.clientEmail}
+        clientDni={chatInfo.clientDni}
       />
     </Card>
   );

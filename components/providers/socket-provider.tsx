@@ -36,7 +36,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     console.log("🔌 Conectando socket a:", socketUrl)
     console.log("🔑 Con token:", token ? "✅" : "❌")
-    console.log("👤 Usuario:", user?.email, user?.role)
+    console.log("👤 Usuario:", user?.dni, user?.role)
 
     const newSocket = io(socketUrl, {
       auth: {

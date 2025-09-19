@@ -21,10 +21,10 @@ interface SaleConfirmationDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   chatId: string
-  clientEmail: string
+  clientDni: number
 }
 
-export function SaleConfirmationDialog({ open, onOpenChange, chatId, clientEmail }: SaleConfirmationDialogProps) {
+export function SaleConfirmationDialog({ open, onOpenChange, chatId, clientDni }: SaleConfirmationDialogProps) {
   const { socket } = useSocket()
   const { toast } = useToast()
 
@@ -79,7 +79,7 @@ export function SaleConfirmationDialog({ open, onOpenChange, chatId, clientEmail
             <DollarSign className="h-5 w-5" />
             <span>Confirmar Venta</span>
           </DialogTitle>
-          <DialogDescription>Registra los detalles de la venta realizada con {clientEmail}</DialogDescription>
+          <DialogDescription>Registra los detalles de la venta realizada con {clientDni}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">

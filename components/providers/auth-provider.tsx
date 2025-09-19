@@ -8,16 +8,23 @@ type AppRole = "CLIENT" | "OPERADOR" | "ADMIN"
 interface User {
   id: string
   name?: string
-  email?: string
-  role: AppRole
+  dni: number
+  role: "CLIENT" | "OPERADOR" | "ADMIN"
+}
+interface RegisterBody {
+  name: string;
+  dni: number;
+  password: string;
+  role: string;
+ 
 }
 
 interface AuthContextType {
   user: User | null
   token: string | null
   isLoading: boolean
-  login: (email: string, password: string) => Promise<void>
-  register: (dni: number, password: string, role: AppRole, name?: string) => Promise<void>
+  login: (dni: number, password: string) => Promise<void>
+  register: (name: string,dni: number, password: string, role: string) => Promise<void>
   logout: () => void
   isTokenValid: () => boolean
   refreshToken: () => Promise<void>
@@ -34,7 +41,8 @@ function isTokenExpired(token: string): boolean {
     const payload = JSON.parse(atob(token.split(".")[1]))
     const now = Date.now() / 1000
     return payload.exp < now
-  } catch {
+  } catch (error) {
+    console.error("❌ [AUTH] expired token", error)
     return true
   }
 }
@@ -104,45 +112,68 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(false)
   }, [])
 
-  const login = async (email: string, password: string) => {
-    const res = await fetch(`${getApiUrl()}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    })
-    if (!res.ok) {
-      let message = "Error en el login"
-      try {
-        const e = await res.json()
-        message = Array.isArray(e?.message) ? e.message.join(", ") : (e?.message || message)
-      } catch {}
-      throw new Error(message)
-    }
-    const data = await res.json()
-    const accessToken = data.access_token || data.token
-    if (!accessToken) throw new Error("No se recibió token")
+const login = async (dni: number, password: string) => {
+  console.log("🔐 [AUTH] Intentando login con:", { dni, passwordLength: password.length })
 
-    const role = normalizeRole(data?.user?.role)
-    const userData: User = {
-      id: data?.user?.id ?? "unknown",
-      email: data?.user?.email ?? email,
-      role,
-      name: data?.user?.name,
-    }
+  const response = await fetch(`${getApiUrl()}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dni, password }),
+  })
 
-    clearAuth()
-    setUser(userData)
-    setToken(accessToken)
-    localStorage.setItem(`authToken-${userData.role}`, accessToken)
-    localStorage.setItem(`user-${userData.role}`, JSON.stringify(userData))
-    localStorage.setItem("token", accessToken)
-    localStorage.setItem("user", JSON.stringify(userData))
+  console.log("📤 [AUTH] Response status:", response.status)
+
+  if (!response.ok) {
+    let errorData
+    try {
+      errorData = await response.json()
+    } catch (err) {
+      console.error("❌ [AUTH] Error parseando JSON de error:", err)
+    }
+    console.error("❌ [AUTH] Login falló:", errorData || "Unknown error")
+    throw new Error(errorData?.message || "Error en el login")
   }
 
-  // Registro: SOLO { dni, password, role, name? } como exige tu DTO
-  const register = async (dni: number, password: string, role: AppRole, name?: string) => {
-    const body: any = { dni, password, role }
-    if (name && name.trim()) body.name = name.trim()
+  const data = await response.json()
+  console.log("✅ [AUTH] Login exitoso, datos recibidos:", data)
+
+  const accessToken = data.access_token || data.token
+  if (!accessToken) {
+    console.error("❌ [AUTH] No se recibió token")
+    throw new Error("No se recibió token")
+  }
+
+  const userData: User = {
+    id: data.user.id,
+    name: data.user.name,
+    dni: data.user.dni,
+    role: data.user.role.toUpperCase() as User["role"],
+  }
+
+  clearAuth()
+  setUser(userData)
+  setToken(accessToken)
+
+  localStorage.setItem(`authToken-${userData.role}`, accessToken)
+  localStorage.setItem(`user-${userData.role}`, JSON.stringify(userData))
+  localStorage.setItem("token", accessToken)
+  localStorage.setItem("user", JSON.stringify(userData))
+
+  console.log("🎫 [AUTH] Token y usuario guardados correctamente")
+}
+
+
+  const register = async (name: string, dni: number, password: string, role: string) => {
+    const endpoint = role === "OPERADOR" ? "/operators" : "/auth/register"
+
+    const body: RegisterBody = {
+      name,
+  dni,
+  password,
+  role,
+};
+
+
 
     const res = await fetch(`${getApiUrl()}/auth/register`, {
       method: "POST",
@@ -164,10 +195,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const roleResp = normalizeRole(data?.user?.role || role)
     const userData: User = {
-      id: data?.user?.id ?? "unknown",
-      email: data?.user?.email, // el back podría setearlo luego
-      role: roleResp,
-      name: data?.user?.name ?? name,
+      id: data.user.id,
+      name: data.user.name,
+      dni: data.user.dni,
+      role: data.user.role.toUpperCase() as User["role"],
     }
 
     clearAuth()
@@ -198,3 +229,16 @@ export function useAuth() {
   if (!ctx) throw new Error("useAuth must be used within an AuthProvider")
   return ctx
 }
+
+
+
+
+
+
+
+
+
+
+
+
+

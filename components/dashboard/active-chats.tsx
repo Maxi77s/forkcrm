@@ -1,45 +1,56 @@
-"use client"
+"use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { CheckCircle, MessageSquare, Clock, Search } from "lucide-react"
-import { Input } from "@/components/ui/input"
-import { useState } from "react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { CheckCircle, MessageSquare, Clock, Search } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { useState } from "react";
 
 interface ChatInfo {
-  chatId: string
-  clientId: string
-  assignedAt: Date
-  isActive: boolean
-  lastMessage?: string
-  unreadCount?: number
+  chatId: string;
+  clientId: string;
+  clientName?: string;
+  assignedAt: Date;
+  isActive: boolean;
+  lastMessage?: string;
+  unreadCount?: number;
 }
 
 interface ActiveChatsProps {
-  chats: ChatInfo[]
-  currentChatId: string | null
-  onJoinChat: (chatId: string) => void
-  onFinishChat: (chatId: string) => void
+  chats: ChatInfo[];
+  currentChatId: string | null;
+  onJoinChat: (chatId: string) => void;
+  onFinishChat: (chatId: string) => void;
 }
 
-export function ActiveChats({ chats, currentChatId, onJoinChat, onFinishChat }: ActiveChatsProps) {
-  const [searchTerm, setSearchTerm] = useState("")
+export function ActiveChats({
+  chats,
+  currentChatId,
+  onJoinChat,
+  onFinishChat,
+}: ActiveChatsProps) {
+  const [searchTerm, setSearchTerm] = useState("");
 
   const filteredChats = chats.filter(
     (chat) =>
       chat.chatId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      chat.clientId.toLowerCase().includes(searchTerm.toLowerCase()),
-  )
+      chat.clientId.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base font-medium">Chats Activos ({chats.length})</CardTitle>
-          <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200">
+          <CardTitle className="text-base font-medium">
+            Chats Activos ({chats.length})
+          </CardTitle>
+          <Badge
+            variant="outline"
+            className="bg-sky-50 text-sky-700 border-sky-200"
+          >
             En línea
           </Badge>
         </div>
@@ -73,13 +84,23 @@ export function ActiveChats({ chats, currentChatId, onJoinChat, onFinishChat }: 
                     <div className="flex items-center">
                       <Avatar className="h-10 w-10 mr-3">
                         <AvatarFallback className="bg-sky-100 text-sky-600">
-                          {chat.clientId.substring(0, 2).toUpperCase()}
+                          {chat.clientName
+                            ? chat.clientName.substring(0, 2).toUpperCase()
+                            : chat.clientId.substring(0, 2).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                       <div>
                         <div className="flex items-center">
-                          <p className="font-medium">Cliente {chat.clientId.substring(0, 8)}...</p>
-                          {chat.unreadCount && <Badge className="ml-2 bg-sky-500">{chat.unreadCount}</Badge>}
+                          <p className="font-medium">
+                            {chat.clientName ??
+                              `Cliente ${chat.clientId.substring(0, 8)}...`}
+                          </p>
+
+                          {chat.unreadCount && (
+                            <Badge className="ml-2 bg-sky-500">
+                              {chat.unreadCount}
+                            </Badge>
+                          )}
                         </div>
                         <div className="flex items-center text-xs text-muted-foreground mt-1">
                           <Clock className="h-3 w-3 mr-1" />
@@ -100,9 +121,15 @@ export function ActiveChats({ chats, currentChatId, onJoinChat, onFinishChat }: 
                     <div className="flex flex-col space-y-2">
                       <Button
                         size="sm"
-                        variant={currentChatId === chat.chatId ? "default" : "outline"}
+                        variant={
+                          currentChatId === chat.chatId ? "default" : "outline"
+                        }
                         onClick={() => onJoinChat(chat.chatId)}
-                        className={currentChatId === chat.chatId ? "bg-sky-500 hover:bg-sky-600" : ""}
+                        className={
+                          currentChatId === chat.chatId
+                            ? "bg-sky-500 hover:bg-sky-600"
+                            : ""
+                        }
                       >
                         {currentChatId === chat.chatId ? "Activo" : "Abrir"}
                       </Button>
@@ -124,5 +151,5 @@ export function ActiveChats({ chats, currentChatId, onJoinChat, onFinishChat }: 
         </ScrollArea>
       </CardContent>
     </Card>
-  )
+  );
 }
