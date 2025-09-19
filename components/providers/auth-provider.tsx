@@ -3,18 +3,13 @@
 import type React from "react"
 import { createContext, useContext, useState, useEffect } from "react"
 
+type AppRole = "CLIENT" | "OPERADOR" | "ADMIN"
+
 interface User {
   id: string
   name?: string
-  email: string
-  role: "CLIENT" | "OPERADOR" | "ADMIN"
-}
-interface RegisterBody {
-  name: string;
-  email: string;
-  password: string;
-  role: string;
- 
+  email?: string
+  role: AppRole
 }
 
 interface AuthContextType {
@@ -22,7 +17,7 @@ interface AuthContextType {
   token: string | null
   isLoading: boolean
   login: (email: string, password: string) => Promise<void>
-  register: (name: string,email: string, password: string, role: string) => Promise<void>
+  register: (dni: number, password: string, role: AppRole, name?: string) => Promise<void>
   logout: () => void
   isTokenValid: () => boolean
   refreshToken: () => Promise<void>
@@ -39,10 +34,16 @@ function isTokenExpired(token: string): boolean {
     const payload = JSON.parse(atob(token.split(".")[1]))
     const now = Date.now() / 1000
     return payload.exp < now
-  } catch (error) {
-    console.error("❌ [AUTH] Error checking token expiration:", error)
+  } catch {
     return true
   }
+}
+
+function normalizeRole(raw?: string): AppRole {
+  const r = (raw || "").toUpperCase().trim()
+  if (r === "ADMIN") return "ADMIN"
+  if (r.includes("OPER")) return "OPERADOR"
+  return "CLIENT"
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -53,158 +54,125 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearAuth = () => {
     setUser(null)
     setToken(null)
-    localStorage.removeItem("authToken-CLIENT")
-    localStorage.removeItem("authToken-OPERADOR")
-    localStorage.removeItem("user-CLIENT")
-    localStorage.removeItem("user-OPERADOR")
+    ;(["CLIENT","OPERADOR","ADMIN"] as AppRole[]).forEach(r => {
+      localStorage.removeItem(`authToken-${r}`)
+      localStorage.removeItem(`user-${r}`)
+    })
     localStorage.removeItem("token")
     localStorage.removeItem("user")
   }
 
-  const isTokenValid = (): boolean => {
-    if (!token) return false
-    return !isTokenExpired(token)
-  }
+  const isTokenValid = (): boolean => !!token && !isTokenExpired(token)
 
   const refreshToken = async () => {
     if (!user) return
-
     try {
-      const response = await fetch(`${getApiUrl()}/auth/refresh`, {
+      const res = await fetch(`${getApiUrl()}/auth/refresh`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       })
-
-      if (!response.ok) throw new Error("Token refresh failed")
-
-      const data = await response.json()
+      if (!res.ok) throw new Error("Token refresh failed")
+      const data = await res.json()
       const newToken = data.access_token || data.token
       setToken(newToken)
       localStorage.setItem(`authToken-${user.role}`, newToken)
       localStorage.setItem("token", newToken)
-    } catch (error) {
-      console.error("❌ [AUTH] Token refresh failed:", error)
+    } catch {
       clearAuth()
     }
   }
 
   useEffect(() => {
-    const savedTokenClient = localStorage.getItem("authToken-CLIENT")
-    const savedTokenOperator = localStorage.getItem("authToken-OPERADOR")
-    const savedUserClient = localStorage.getItem("user-CLIENT")
-    const savedUserOperator = localStorage.getItem("user-OPERADOR")
-
-    let tokenToUse = null
-    let userToUse = null
-
-    if (savedTokenClient && savedUserClient) {
+    const tryLoad = (role: AppRole) => {
+      const tok = localStorage.getItem(`authToken-${role}`)
+      const usr = localStorage.getItem(`user-${role}`)
+      if (!tok || !usr) return false
       try {
-        const userData = JSON.parse(savedUserClient)
-        if (!isTokenExpired(savedTokenClient)) {
-          tokenToUse = savedTokenClient
-          userToUse = userData
+        const u: User = JSON.parse(usr)
+        u.role = normalizeRole(u.role)
+        if (!isTokenExpired(tok)) {
+          setToken(tok)
+          setUser(u)
+          localStorage.setItem("token", tok)
+          localStorage.setItem("user", JSON.stringify(u))
+          return true
         }
-      } catch {
-        localStorage.removeItem("authToken-CLIENT")
-        localStorage.removeItem("user-CLIENT")
-      }
+      } catch {}
+      return false
     }
-
-    if (!tokenToUse && savedTokenOperator && savedUserOperator) {
-      try {
-        const userData = JSON.parse(savedUserOperator)
-        if (!isTokenExpired(savedTokenOperator)) {
-          tokenToUse = savedTokenOperator
-          userToUse = userData
-        }
-      } catch {
-        localStorage.removeItem("authToken-OPERADOR")
-        localStorage.removeItem("user-OPERADOR")
-      }
-    }
-
-    if (tokenToUse && userToUse) {
-      setToken(tokenToUse)
-      setUser(userToUse)
-      localStorage.setItem("token", tokenToUse)
-      localStorage.setItem("user", JSON.stringify(userToUse))
-    }
-
+    if (!tryLoad("CLIENT")) if (!tryLoad("OPERADOR")) tryLoad("ADMIN")
     setIsLoading(false)
   }, [])
 
   const login = async (email: string, password: string) => {
-    const response = await fetch(`${getApiUrl()}/auth/login`, {
+    const res = await fetch(`${getApiUrl()}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.message || "Error en el login")
+    if (!res.ok) {
+      let message = "Error en el login"
+      try {
+        const e = await res.json()
+        message = Array.isArray(e?.message) ? e.message.join(", ") : (e?.message || message)
+      } catch {}
+      throw new Error(message)
     }
-
-    const data = await response.json()
+    const data = await res.json()
     const accessToken = data.access_token || data.token
     if (!accessToken) throw new Error("No se recibió token")
 
+    const role = normalizeRole(data?.user?.role)
     const userData: User = {
-      id: data.user.id,
-      email: data.user.email,
-      role: data.user.role.toUpperCase() as User["role"],
+      id: data?.user?.id ?? "unknown",
+      email: data?.user?.email ?? email,
+      role,
+      name: data?.user?.name,
     }
 
     clearAuth()
     setUser(userData)
     setToken(accessToken)
-
     localStorage.setItem(`authToken-${userData.role}`, accessToken)
     localStorage.setItem(`user-${userData.role}`, JSON.stringify(userData))
     localStorage.setItem("token", accessToken)
     localStorage.setItem("user", JSON.stringify(userData))
   }
 
-  const register = async (name: string, email: string, password: string, role: string) => {
-    const endpoint = role === "OPERADOR" ? "/operators" : "/auth/register"
+  // Registro: SOLO { dni, password, role, name? } como exige tu DTO
+  const register = async (dni: number, password: string, role: AppRole, name?: string) => {
+    const body: any = { dni, password, role }
+    if (name && name.trim()) body.name = name.trim()
 
-    const body: RegisterBody = {
-      name,
-  email,
-  password,
-  role,
-};
-
-
-
-    const response = await fetch(`${getApiUrl()}${endpoint}`, {
+    const res = await fetch(`${getApiUrl()}/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.message || "Error en el registro")
+    if (!res.ok) {
+      let message = "Error en el registro"
+      try {
+        const e = await res.json()
+        message = Array.isArray(e?.message) ? e.message.join(", ") : (e?.message || message)
+      } catch {}
+      throw new Error(message)
     }
 
-    const data = await response.json()
+    const data = await res.json()
     const accessToken = data.access_token || data.token
     if (!accessToken) throw new Error("No se recibió token")
 
+    const roleResp = normalizeRole(data?.user?.role || role)
     const userData: User = {
-      id: data.user.id,
-      email: data.user.email,
-      role: data.user.role.toUpperCase() as User["role"],
+      id: data?.user?.id ?? "unknown",
+      email: data?.user?.email, // el back podría setearlo luego
+      role: roleResp,
+      name: data?.user?.name ?? name,
     }
 
     clearAuth()
     setUser(userData)
     setToken(accessToken)
-
     localStorage.setItem(`authToken-${userData.role}`, accessToken)
     localStorage.setItem(`user-${userData.role}`, JSON.stringify(userData))
     localStorage.setItem("token", accessToken)
@@ -218,16 +186,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{
-        user,
-        token,
-        isLoading,
-        login,
-        register,
-        logout,
-        isTokenValid,
-        refreshToken,
-      }}
+      value={{ user, token, isLoading, login, register, logout, isTokenValid, refreshToken }}
     >
       {children}
     </AuthContext.Provider>
@@ -235,9 +194,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext)
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider")
-  }
-  return context
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error("useAuth must be used within an AuthProvider")
+  return ctx
 }
