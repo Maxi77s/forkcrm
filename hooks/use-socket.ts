@@ -1,127 +1,71 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { useAuth } from "@/components/providers/auth-provider";
 
 interface UseSocketProps {
-  userRole: string;
   serverUrl?: string;
+  /** Si es true exige token para conectar (operador). Para cliente anónimo usa false. */
+  requireToken?: boolean;
 }
 
 export const useSocket = ({
-  userRole,
-  serverUrl = "http://localhost:3002",
+  serverUrl = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:3002",
+  requireToken = true,
 }: UseSocketProps) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const socketRef = useRef<Socket | null>(null);
-  const { token, user } = useAuth();
-  const socketInitializedRef = useRef(false); // <-- previene reconexiones múltiples
+
+  const { token } = useAuth();
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    if (!token || !user) return; // Espera hasta tener token y usuario
-    if (socketInitializedRef.current) return; // Ya inicializado, no reconectar
+    // 👉 si requiere token y no hay token, no conectes
+    if (requireToken && !token) return;
+    if (initializedRef.current) return;
+    initializedRef.current = true;
 
-    socketInitializedRef.current = true;
-
-    console.log("🔌 [SOCKET] Iniciando conexión para:", userRole);
-    console.log("🔌 [SOCKET] Estado actual:", {
-      hasToken: !!token,
-      hasUser: !!user,
-      tokenPreview: token ? token.substring(0, 20) + "..." : null,
-      user,
-      serverUrl,
-    });
-
-    console.log(`🔑 [SOCKET] Conectando socket para ${userRole} con:`);
-    console.log(`🔑 [SOCKET] - Token: ${token.substring(0, 20)}...`);
-    console.log(`🔑 [SOCKET] - Usuario: ${user.dni} (${user.role})`);
-    console.log(`🔑 [SOCKET] - URL: ${serverUrl}/chat`);
-
-    const newSocket = io(`${serverUrl}/chat`, {
-      auth: { token },
+    const url = serverUrl.replace(/\/$/, "");
+    const s = io(url, {
       transports: ["websocket", "polling"],
+      withCredentials: true,
       timeout: 20000,
-      forceNew: true,
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
+      // La guía usa token en query. Si no hay token (cliente anónimo), va vacío.
+      query: token ? { token } : {},
+      auth: {}, // el back no lo usa según la guía
     });
 
-    socketRef.current = newSocket;
-    setSocket(newSocket);
+    setSocket(s);
 
-    // Eventos de conexión
-    newSocket.on("connect", () => {
-      console.log(
-        `✅ [SOCKET] Socket conectado para ${userRole}:`,
-        newSocket.id
-      );
-      console.log(`✅ [SOCKET] Auth data enviado:`, {
-        token: token.substring(0, 20) + "...",
-        userId: user.id,
-        userRole: user.role,
-      });
+    s.on("connect", () => {
       setIsConnected(true);
+      s.emit("getStats"); // opcional, no afecta al cliente
     });
 
-    newSocket.on("disconnect", (reason) => {
-      console.log(`❌ [SOCKET] Socket desconectado para ${userRole}:`, reason);
+    s.on("disconnect", (reason) => {
       setIsConnected(false);
+      console.warn("❌ [SOCKET] disconnect:", reason);
     });
 
-    newSocket.on("connect_error", (error) => {
-      console.error(`🔥 [SOCKET] Error de conexión para ${userRole}:`, error);
+    s.on("connect_error", (err: any) => {
       setIsConnected(false);
+      console.error("🔥 [SOCKET] connect_error:", { message: err?.message, data: err?.data });
     });
 
-    newSocket.on("reconnect", (attemptNumber) => {
-      console.log(
-        `🔄 [SOCKET] Reconectado para ${userRole} en intento:`,
-        attemptNumber
-      );
-    });
-
-    newSocket.on("reconnect_error", (error) => {
-      console.error(
-        `🔄❌ [SOCKET] Error de reconexión para ${userRole}:`,
-        error
-      );
-    });
-
-    // Logging de emit
-    const originalEmit = newSocket.emit;
-    newSocket.emit = function (event: string, ...args: any[]) {
-      console.log(`📤 [SOCKET-${userRole}] Emitiendo evento:`, event, args);
-      return originalEmit.apply(this, [event, ...args]);
-    };
-
-    // Logging de on
-    const originalOn = newSocket.on;
-    newSocket.on = function (
-      event: string,
-      listener: (...args: any[]) => void
-    ) {
-      const wrappedListener = (...args: any[]) => {
-        if (event !== "connect" && event !== "disconnect") {
-          console.log(`📥 [SOCKET-${userRole}] Evento recibido:`, event, args);
-        }
-        return listener(...args);
-      };
-      return originalOn.call(this, event, wrappedListener);
-    };
-
-    // Cleanup
     return () => {
-      console.log(`🔌 [SOCKET] Desconectando socket para ${userRole}`);
-      newSocket.disconnect();
-      socketRef.current = null;
+      try {
+        s.removeAllListeners();
+        s.disconnect();
+      } catch {}
       setSocket(null);
       setIsConnected(false);
-      socketInitializedRef.current = false;
+      initializedRef.current = false;
     };
-  }, [userRole, serverUrl, token, user]);
+  }, [serverUrl, token, requireToken]);
 
   return { socket, isConnected };
 };

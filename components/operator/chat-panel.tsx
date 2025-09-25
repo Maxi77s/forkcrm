@@ -290,3 +290,5 @@ export function ChatPanel({ chatId, onChatFinished }: ChatPanelProps) {
     </Card>
   );
 }
+
+export default ChatPanel

@@ -10,6 +10,7 @@ interface User {
   name?: string
   dni: number
   role: "CLIENT" | "OPERADOR" | "ADMIN"
+  email?: string
 }
 interface RegisterBody {
   name: string;

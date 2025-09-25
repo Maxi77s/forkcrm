@@ -1,824 +1,369 @@
-// "use client"
-
-// import { useState, useEffect, useCallback } from "react"
-// import { useSocket } from "@/hooks/use-socket"
-// import { useAuth } from "@/components/providers/auth-provider"
-// import { useToast } from "@/hooks/use-toast"
-
-// interface Message {
-//   id: string
-//   content: string
-//   sender: "CLIENT" | "BOT" | "OPERADOR" | "SYSTEM"
-//   timestamp: Date
-//   chatId: string
-//   senderName?: string
-//   type: "TEXT" | "IMAGE"
-//   imageUrl?: string
-// }
-
-// interface ChatPreview {
-//   chatId: string
-//   clientId: string
-//   clientName?: string
-//   lastMessage: string
-//   lastMessageTime: Date
-//   unreadCount: number
-//   status: "ACTIVE" | "FINISHED" | "WAITING"
-//   isOnline: boolean
-//   avatar?: string
-// }
-
-// interface ConnectedClient {
-//   userId: string
-//   connectedAt: Date
-//   currentChatId?: string
-// }
-
-// export function useChatManager() {
-//   const { user } = useAuth()
-//   const { toast } = useToast()
-
-//   // Estados
-//   const [chats, setChats] = useState<ChatPreview[]>([])
-//   const [messages, setMessages] = useState<Message[]>([])
-//   const [connectedClients, setConnectedClients] = useState<ConnectedClient[]>([])
-//   const [isTyping, setIsTyping] = useState(false)
-//   const [typingChatId, setTypingChatId] = useState<string | null>(null)
-//   const [isLoading, setIsLoading] = useState(true)
-
-//   // Socket connection
-//   const { socket, isConnected } = useSocket({
-//     userRole: "OPERADOR",
-//     serverUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:3002",
-//   })
-
-//   // Función para obtener el nombre del remitente
-//   const getSenderName = useCallback((senderType: string, userId: string): string => {
-//     switch (senderType) {
-//       case "BOT":
-//         return "DepilBot"
-//       case "CLIENT":
-//         return `Cliente ${userId.substring(0, 8)}...`
-//       case "OPERADOR":
-//         return "Tú"
-//       case "SYSTEM":
-//         return "Sistema"
-//       default:
-//         return userId
-//     }
-//   }, [])
-
-//   // Función para actualizar o agregar chat
-//   const updateOrAddChat = useCallback(
-//     (chatData: any, lastMessage?: string, incrementUnread = false) => {
-//       setChats((prev) => {
-//         const existingIndex = prev.findIndex((chat) => chat.chatId === chatData.chatId)
-
-//         const chatPreview: ChatPreview = {
-//           chatId: chatData.chatId,
-//           clientId: chatData.clientId,
-//           clientName: chatData.clientName,
-//           lastMessage: lastMessage || chatData.lastMessage || "Chat iniciado",
-//           lastMessageTime: new Date(),
-//           unreadCount: incrementUnread ? (existingIndex >= 0 ? prev[existingIndex].unreadCount + 1 : 1) : 0,
-//           status: chatData.status || "ACTIVE",
-//           isOnline: connectedClients.some((client) => client.userId === chatData.clientId),
-//         }
-
-//         if (existingIndex >= 0) {
-//           // Actualizar chat existente
-//           const updated = [...prev]
-//           updated[existingIndex] = {
-//             ...updated[existingIndex],
-//             ...chatPreview,
-//             unreadCount: incrementUnread ? updated[existingIndex].unreadCount + 1 : updated[existingIndex].unreadCount,
-//           }
-//           return updated
-//         } else {
-//           // Agregar nuevo chat
-//           return [chatPreview, ...prev]
-//         }
-//       })
-//     },
-//     [connectedClients],
-//   )
-
-//   // Configurar event listeners del socket
-//   useEffect(() => {
-//     if (!socket) return
-
-//     console.log("🔌 [CHAT-MANAGER] Configurando event listeners...")
-
-//     // Dashboard inicial del operador
-//     socket.on("operatorDashboard", (data) => {
-//       console.log("📊 [CHAT-MANAGER] Dashboard recibido:", data)
-
-//       if (data.connectedClients) {
-//         setConnectedClients(data.connectedClients)
-//       }
-
-//       if (data.assignedChats) {
-//         // Convertir chats asignados a ChatPreview
-//         const chatPreviews: ChatPreview[] = data.assignedChats.map((chatId: string) => ({
-//           chatId,
-//           clientId: `client-${chatId.substring(0, 8)}`,
-//           lastMessage: "Chat asignado",
-//           lastMessageTime: new Date(),
-//           unreadCount: 0,
-//           status: "ACTIVE" as const,
-//           isOnline: false,
-//         }))
-
-//         setChats(chatPreviews)
-//       }
-
-//       setIsLoading(false)
-//     })
-
-//     // Actualización de usuarios conectados
-//     socket.on("connectedUsersUpdate", (data) => {
-//       console.log("👥 [CHAT-MANAGER] Usuarios conectados actualizados:", data)
-
-//       if (data.clients) {
-//         setConnectedClients(data.clients)
-
-//         // Actualizar estado online de los chats
-//         setChats((prev) =>
-//           prev.map((chat) => ({
-//             ...chat,
-//             isOnline: data.clients.some((client: ConnectedClient) => client.userId === chat.clientId),
-//           })),
-//         )
-//       }
-//     })
-
-//     // Chat auto-asignado
-//     socket.on("chatAutoAssigned", (data) => {
-//       console.log("🚨 [CHAT-MANAGER] Chat auto-asignado:", data)
-
-//       updateOrAddChat(
-//         {
-//           chatId: data.chatId,
-//           clientId: data.clientId,
-//           status: "ACTIVE",
-//         },
-//         "Chat asignado automáticamente",
-//       )
-
-//       // Agregar historial si viene
-//       if (data.history && data.history.length > 0) {
-//         const historyMessages: Message[] = data.history.map((msg: any) => ({
-//           id: msg.id,
-//           content: msg.content,
-//           sender: msg.sender,
-//           timestamp: new Date(msg.timestamp),
-//           chatId: msg.chatId,
-//           senderName: getSenderName(msg.sender, msg.userId || msg.senderName),
-//           type: msg.type || "TEXT",
-//           imageUrl: msg.imageUrl,
-//         }))
-
-//         setMessages((prev) => {
-//           const filtered = prev.filter((m) => m.chatId !== data.chatId)
-//           return [...filtered, ...historyMessages]
-//         })
-//       }
-
-//       toast({
-//         title: "Nuevo chat asignado",
-//         description: `Cliente ${data.clientId.substring(0, 8)}... necesita ayuda`,
-//       })
-//     })
-
-//     // Nuevo mensaje
-//     socket.on("newMessage", (message) => {
-//       console.log("💬 [CHAT-MANAGER] Nuevo mensaje:", message)
-
-//       const newMessage: Message = {
-//         id: message.id,
-//         content: message.content,
-//         sender: message.senderType,
-//         timestamp: new Date(message.timestamp),
-//         chatId: message.chatId,
-//         senderName: getSenderName(message.senderType, message.userId),
-//         type: message.type || "TEXT",
-//         imageUrl: message.imageUrl,
-//       }
-
-//       // Agregar mensaje
-//       setMessages((prev) => {
-//         const exists = prev.some((m) => m.id === message.id)
-//         if (exists) return prev
-//         return [...prev, newMessage]
-//       })
-
-//       // Actualizar último mensaje en el chat
-//       setChats((prev) =>
-//         prev.map((chat) => {
-//           if (chat.chatId === message.chatId) {
-//             return {
-//               ...chat,
-//               lastMessage: message.content,
-//               lastMessageTime: new Date(message.timestamp),
-//               unreadCount: message.senderType === "CLIENT" ? chat.unreadCount + 1 : chat.unreadCount,
-//             }
-//           }
-//           return chat
-//         }),
-//       )
-
-//       // Notificación si es mensaje de cliente
-//       if (message.senderType === "CLIENT") {
-//         toast({
-//           title: "Nuevo mensaje",
-//           description: `${getSenderName(message.senderType, message.userId)}: ${message.content.substring(0, 50)}...`,
-//         })
-//       }
-//     })
-
-//     // Historial del chat
-//     socket.on("chatHistory", (data) => {
-//       console.log("📚 [CHAT-MANAGER] Historial recibido:", data)
-
-//       const historyMessages: Message[] = data.messages.map((msg: any) => ({
-//         id: msg.id,
-//         content: msg.content,
-//         sender: msg.sender,
-//         timestamp: new Date(msg.timestamp),
-//         chatId: msg.chatId,
-//         senderName: getSenderName(msg.sender, msg.userId || msg.senderName),
-//         type: msg.type || "TEXT",
-//         imageUrl: msg.imageUrl,
-//       }))
-
-//       // Reemplazar mensajes del chat específico
-//       setMessages((prev) => {
-//         const otherMessages = prev.filter((m) => m.chatId !== data.chatId)
-//         return [...otherMessages, ...historyMessages]
-//       })
-//     })
-
-//     // Usuario escribiendo
-//     socket.on("userTyping", (data) => {
-//       console.log("⌨️ [CHAT-MANAGER] Usuario escribiendo:", data)
-
-//       if (data.userId !== user?.id) {
-//         setIsTyping(data.isTyping)
-//         setTypingChatId(data.chatId)
-
-//         if (data.isTyping) {
-//           // Auto-clear typing después de 3 segundos
-//           setTimeout(() => {
-//             setIsTyping(false)
-//             setTypingChatId(null)
-//           }, 3000)
-//         }
-//       }
-//     })
-
-//     // Chat finalizado
-//     socket.on("chatFinished", (data) => {
-//       console.log("✅ [CHAT-MANAGER] Chat finalizado:", data)
-
-//       setChats((prev) =>
-//         prev.map((chat) => {
-//           if (chat.chatId === data.chatId) {
-//             return {
-//               ...chat,
-//               status: "FINISHED" as const,
-//               lastMessage: "Chat finalizado",
-//               lastMessageTime: new Date(),
-//             }
-//           }
-//           return chat
-//         }),
-//       )
-
-//       toast({
-//         title: "Chat finalizado",
-//         description: "El chat ha sido finalizado exitosamente",
-//       })
-//     })
-
-//     // Chat calificado
-//     socket.on("chatRated", (data) => {
-//       console.log("⭐ [CHAT-MANAGER] Chat calificado:", data)
-
-//       toast({
-//         title: "Nueva calificación",
-//         description: `Recibiste ${data.rating} estrellas`,
-//       })
-//     })
-
-//     // Errores
-//     socket.on("error", (error) => {
-//       console.error("❌ [CHAT-MANAGER] Error:", error)
-//       toast({
-//         title: "Error",
-//         description: error.message || "Ha ocurrido un error",
-//         variant: "destructive",
-//       })
-//     })
-
-//     // Solicitar dashboard inicial
-//     socket.emit("getStats")
-
-//     return () => {
-//       console.log("🧹 [CHAT-MANAGER] Limpiando event listeners...")
-//       socket.off("operatorDashboard")
-//       socket.off("connectedUsersUpdate")
-//       socket.off("chatAutoAssigned")
-//       socket.off("newMessage")
-//       socket.off("chatHistory")
-//       socket.off("userTyping")
-//       socket.off("chatFinished")
-//       socket.off("chatRated")
-//       socket.off("error")
-//     }
-//   }, [socket, user?.id, getSenderName, updateOrAddChat, toast])
-
-//   // Funciones para interactuar con el chat
-//   const joinChat = useCallback(
-//     (chatId: string) => {
-//       if (!socket) return
-
-//       console.log("🚀 [CHAT-MANAGER] Uniéndose al chat:", chatId)
-//       socket.emit("joinChat", { chatId })
-
-//       // Marcar como leído
-//       setChats((prev) => prev.map((chat) => (chat.chatId === chatId ? { ...chat, unreadCount: 0 } : chat)))
-//     },
-//     [socket],
-//   )
-
-//   const sendMessage = useCallback(
-//     (chatId: string, content: string) => {
-//       if (!socket || !user?.id) return
-
-//       console.log("📤 [CHAT-MANAGER] Enviando mensaje:", { chatId, content })
-//       socket.emit("sendMessage", {
-//         userId: user.id,
-//         chatId,
-//         content,
-//       })
-//     },
-//     [socket, user?.id],
-//   )
-
-//   const finishChat = useCallback(
-//     (chatId: string, reason = "Chat finalizado por el operador") => {
-//       if (!socket) return
-
-//       console.log("🏁 [CHAT-MANAGER] Finalizando chat:", chatId)
-//       socket.emit("finishChat", {
-//         chatId,
-//         reason,
-//       })
-//     },
-//     [socket],
-//   )
-
-//   const startTyping = useCallback(
-//     (chatId: string) => {
-//       if (!socket) return
-//       socket.emit("typingStart", { chatId })
-//     },
-//     [socket],
-//   )
-
-//   const stopTyping = useCallback(
-//     (chatId: string) => {
-//       if (!socket) return
-//       socket.emit("typingStop", { chatId })
-//     },
-//     [socket],
-//   )
-
-//   return {
-//     // Estados
-//     chats,
-//     messages,
-//     connectedClients,
-//     isTyping: isTyping && typingChatId,
-//     typingChatId,
-//     isLoading,
-//     isConnected,
-
-//     // Funciones
-//     joinChat,
-//     sendMessage,
-//     finishChat,
-//     startTyping,
-//     stopTyping,
-
-//     // Utilidades
-//     getSenderName,
-//   }
-// }
-
-
-
-
+// src/hooks/use-chat-manager.ts
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useEffect, useState } from "react"
 import { useSocket } from "@/hooks/use-socket"
 import { useAuth } from "@/components/providers/auth-provider"
-import { useToast } from "@/hooks/use-toast"
-import type { Message, ChatPreview, ConnectedClient } from "@/types/chats"
+
+type ChatStatus = "ACTIVE" | "WAITING" | "FINISHED"
+
+export interface ChatItem {
+  chatId: string
+  clientId: string
+  clientName?: string
+  status: ChatStatus
+  isOnline: boolean
+  lastMessageTime: Date
+  lastMessagePreview?: string
+}
+
+export interface ChatMessage {
+  id: string
+  chatId: string
+  sender: "CLIENT" | "BOT" | "OPERADOR" | "SYSTEM"
+  content: string
+  type: "TEXT" | "IMAGE"
+  imageUrl?: string
+  timestamp: Date
+}
+
+/** ========= MODO MOCK (forzado) =========
+ *  Deja todo hardcodeado para probar estilos y flujo.
+ *  Para volver al back real, pon useMock = (process.env.NEXT_PUBLIC_CHAT_MOCK === "1")
+ */
+const useMock = true
+
+const now = new Date()
+const minutesAgo = (m: number) => new Date(now.getTime() - m * 60_000)
+
+// ------- CHATS MOCKEADOS -------
+const MOCK_CHATS: ChatItem[] = [
+  {
+    chatId: "c-1001",
+    clientId: "u-aaa111",
+    clientName: "Carla Benítez",
+    status: "ACTIVE",
+    isOnline: true,
+    lastMessageTime: minutesAgo(2),
+    lastMessagePreview: "¿Tienen turno para mañana?",
+  },
+  {
+    chatId: "c-1002",
+    clientId: "u-bbb222",
+    clientName: "Lucas Romero",
+    status: "WAITING",
+    isOnline: false,
+    lastMessageTime: minutesAgo(42),
+    lastMessagePreview: "Quiero ver precios",
+  },
+  {
+    chatId: "c-1003",
+    clientId: "u-ccc333",
+    clientName: "María López",
+    status: "ACTIVE",
+    isOnline: true,
+    lastMessageTime: minutesAgo(5),
+    lastMessagePreview: "Gracias!",
+  },
+  {
+    chatId: "c-1004",
+    clientId: "u-ddd444",
+    clientName: "Julián Vega",
+    status: "FINISHED",
+    isOnline: false,
+    lastMessageTime: minutesAgo(120),
+    lastMessagePreview: "Nos vemos 👍",
+  },
+  {
+    chatId: "c-1005",
+    clientId: "u-eee555",
+    clientName: "Paula Fernández",
+    status: "ACTIVE",
+    isOnline: true,
+    lastMessageTime: minutesAgo(12),
+    lastMessagePreview: "¿Hay promo 2x1?",
+  },
+  {
+    chatId: "c-1006",
+    clientId: "u-fff666",
+    clientName: "Sofía Rivas",
+    status: "WAITING",
+    isOnline: true,
+    lastMessageTime: minutesAgo(30),
+    lastMessagePreview: "¿Me pasás el catálogo?",
+  },
+  {
+    chatId: "c-1007",
+    clientId: "u-ggg777",
+    clientName: "Tomás Quiroga",
+    status: "ACTIVE",
+    isOnline: false,
+    lastMessageTime: minutesAgo(9),
+    lastMessagePreview: "Envío una foto",
+  },
+  {
+    chatId: "c-1008",
+    clientId: "u-hhh888",
+    clientName: "Luz Martínez",
+    status: "FINISHED",
+    isOnline: false,
+    lastMessageTime: minutesAgo(300),
+    lastMessagePreview: "Muchas gracias por la atención",
+  },
+]
+
+// ------- MENSAJES MOCKEADOS -------
+const MOCK_MESSAGES: ChatMessage[] = [
+  // c-1001 Carla
+  { id: "m-1001-1", chatId: "c-1001", sender: "BOT", content: "¡Hola! Soy tu asistente 🤖", type: "TEXT", timestamp: minutesAgo(25) },
+  { id: "m-1001-2", chatId: "c-1001", sender: "CLIENT", content: "¿Tienen turno para mañana?", type: "TEXT", timestamp: minutesAgo(2) },
+
+  // c-1002 Lucas (WAITING)
+  { id: "m-1002-1", chatId: "c-1002", sender: "CLIENT", content: "Quiero ver precios", type: "TEXT", timestamp: minutesAgo(42) },
+
+  // c-1003 María
+  { id: "m-1003-1", chatId: "c-1003", sender: "CLIENT", content: "Hola! Me pasás info de depilación?", type: "TEXT", timestamp: minutesAgo(14) },
+  { id: "m-1003-2", chatId: "c-1003", sender: "OPERADOR", content: "¡Claro! ¿Zona a depilar y disponibilidad?", type: "TEXT", timestamp: minutesAgo(8) },
+  { id: "m-1003-3", chatId: "c-1003", sender: "CLIENT", content: "Piernas y axilas. Mañana a la tarde.", type: "TEXT", timestamp: minutesAgo(6) },
+  { id: "m-1003-4", chatId: "c-1003", sender: "OPERADOR", content: "Perfecto. Te reservo 16:30?", type: "TEXT", timestamp: minutesAgo(5) },
+  { id: "m-1003-5", chatId: "c-1003", sender: "CLIENT", content: "Gracias!", type: "TEXT", timestamp: minutesAgo(5) },
+
+  // c-1004 Julián (FINISHED)
+  { id: "m-1004-1", chatId: "c-1004", sender: "OPERADOR", content: "¿Puedo ayudarte con algo más?", type: "TEXT", timestamp: minutesAgo(121) },
+  { id: "m-1004-2", chatId: "c-1004", sender: "CLIENT", content: "Nos vemos 👍", type: "TEXT", timestamp: minutesAgo(120) },
+  { id: "m-1004-3", chatId: "c-1004", sender: "SYSTEM", content: "La conversación se finalizó. ¡Gracias por escribirnos!", type: "TEXT", timestamp: minutesAgo(119) },
+
+  // c-1005 Paula
+  { id: "m-1005-1", chatId: "c-1005", sender: "CLIENT", content: "¿Hay promo 2x1?", type: "TEXT", timestamp: minutesAgo(12) },
+
+  // c-1006 Sofía (WAITING)
+  { id: "m-1006-1", chatId: "c-1006", sender: "CLIENT", content: "¿Me pasás el catálogo?", type: "TEXT", timestamp: minutesAgo(30) },
+
+  // c-1007 Tomás
+  { id: "m-1007-1", chatId: "c-1007", sender: "CLIENT", content: "Envío una foto", type: "TEXT", timestamp: minutesAgo(9) },
+  { id: "m-1007-2", chatId: "c-1007", sender: "CLIENT", content: "", type: "IMAGE", imageUrl: "https://images.unsplash.com/photo-1520975922284-3b27c7c4f853?w=1200&q=80", timestamp: minutesAgo(9) },
+
+  // c-1008 Luz (FINISHED)
+  { id: "m-1008-1", chatId: "c-1008", sender: "CLIENT", content: "Muchas gracias por la atención", type: "TEXT", timestamp: minutesAgo(300) },
+]
+
+/** ===== helpers ===== */
+function upsertChat(list: ChatItem[], incoming: ChatItem): ChatItem[] {
+  const i = list.findIndex((c) => c.chatId === incoming.chatId)
+  if (i === -1) {
+    return [incoming, ...list].sort((a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime())
+  }
+  const updated = [...list]
+  updated[i] = { ...updated[i], ...incoming }
+  return updated.sort((a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime())
+}
 
 export function useChatManager() {
-  const { user } = useAuth()
-  const { toast } = useToast()
-
-  // Estados
-  const [chats, setChats] = useState<ChatPreview[]>([])
-  const [messages, setMessages] = useState<Message[]>([])
-  const [connectedClients, setConnectedClients] = useState<ConnectedClient[]>([])
+  const [chats, setChats] = useState<ChatItem[]>(useMock ? MOCK_CHATS : [])
+  const [messages, setMessages] = useState<ChatMessage[]>(useMock ? MOCK_MESSAGES : [])
   const [isTyping, setIsTyping] = useState(false)
   const [typingChatId, setTypingChatId] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(useMock ? false : true)
 
-  // Socket connection
+  // aunque no lo uses en mock, mantenemos las firmas
+  const apiBase = process.env.NEXT_PUBLIC_WS_URL?.replace(/\/$/, "") || "http://localhost:3002"
+  const { token } = useAuth()
   const { socket, isConnected } = useSocket({
-    userRole: "OPERADOR",
-    serverUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:3002",
+    // en mock no se usará, pero dejamos la misma interfaz
+    serverUrl: apiBase,
+    requireToken: true,
   })
 
-  // Función para obtener el nombre del remitente
-  const getSenderName = useCallback((senderType: string, userId: string): string => {
-    switch (senderType) {
-      case "BOT":
-        return "DepilBot"
-      case "CLIENT":
-        return `Cliente ${userId.substring(0, 8)}...`
-      case "OPERADOR":
-        return "Tú"
-      case "SYSTEM":
-        return "Sistema"
-      default:
-        return userId
-    }
-  }, [])
-
-  // Función para actualizar o agregar chat
-  const updateOrAddChat = useCallback(
-    (chatData: any, lastMessage?: string, incrementUnread = false) => {
-      setChats((prev) => {
-        const existingIndex = prev.findIndex((chat) => chat.chatId === chatData.chatId)
-
-        const chatPreview: ChatPreview = {
-          chatId: chatData.chatId,
-          clientId: chatData.clientId,
-          clientName: chatData.clientName,
-          lastMessage: lastMessage || chatData.lastMessage || "Chat iniciado",
-          lastMessageTime: new Date(),
-          unreadCount: incrementUnread ? (existingIndex >= 0 ? prev[existingIndex].unreadCount + 1 : 1) : 0,
-          status: chatData.status || "ACTIVE",
-          isOnline: connectedClients.some((client) => client.userId === chatData.clientId),
-        }
-
-        if (existingIndex >= 0) {
-          // Actualizar chat existente
-          const updated = [...prev]
-          updated[existingIndex] = {
-            ...updated[existingIndex],
-            ...chatPreview,
-            unreadCount: incrementUnread ? updated[existingIndex].unreadCount + 1 : updated[existingIndex].unreadCount,
-          }
-          return updated
-        } else {
-          // Agregar nuevo chat
-          return [chatPreview, ...prev]
-        }
-      })
-    },
-    [connectedClients],
-  )
-
-  // Configurar event listeners del socket
+  /** Cargar lista desde back si NO es mock */
   useEffect(() => {
-    if (!socket) return
-
-    console.log("🔌 [CHAT-MANAGER] Configurando event listeners...")
-
-    // Dashboard inicial del operador
-    socket.on("operatorDashboard", (data) => {
-      console.log("📊 [CHAT-MANAGER] Dashboard recibido:", data)
-
-      if (data.connectedClients) {
-        setConnectedClients(data.connectedClients)
-      }
-
-      if (data.assignedChats) {
-        // Convertir chats asignados a ChatPreview
-        const chatPreviews: ChatPreview[] = data.assignedChats.map((chatId: string) => ({
-          chatId,
-          clientId: `client-${chatId.substring(0, 8)}`,
-          lastMessage: "Chat asignado",
-          lastMessageTime: new Date(),
-          unreadCount: 0,
-          status: "ACTIVE" as const,
-          isOnline: false,
+    if (useMock) return
+    ;(async () => {
+      try {
+        setIsLoading(true)
+        const res = await fetch(`${apiBase}/chats`, {
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        })
+        if (!res.ok) throw new Error(`GET /chats ${res.status}`)
+        const data = await res.json()
+        const mapped: ChatItem[] = (data || []).map((c: any) => ({
+          chatId: c.id,
+          clientId: c.userId,
+          clientName: c.clientName,
+          status: c.status === "CLOSED" ? "FINISHED" : (c.status as "ACTIVE" | "WAITING"),
+          isOnline: true,
+          lastMessageTime: new Date(c.updatedAt ?? c.createdAt ?? Date.now()),
+          lastMessagePreview: c.lastMessage?.content ?? "",
         }))
-
-        setChats(chatPreviews)
+        setChats(mapped)
+      } catch (e) {
+        console.error("Error cargando /chats", e)
+      } finally {
+        setIsLoading(false)
       }
+    })()
+  }, [apiBase, token])
 
-      setIsLoading(false)
-    })
+  /** Suscripciones WS si NO es mock */
+  useEffect(() => {
+    if (useMock || !socket) return
 
-    // Actualización de usuarios conectados
-    socket.on("connectedUsersUpdate", (data) => {
-      console.log("👥 [CHAT-MANAGER] Usuarios conectados actualizados:", data)
-
-      if (data.clients) {
-        setConnectedClients(data.clients)
-
-        // Actualizar estado online de los chats
-        setChats((prev) =>
-          prev.map((chat) => ({
-            ...chat,
-            isOnline: data.clients.some((client: ConnectedClient) => client.userId === chat.clientId),
-          })),
-        )
+    const onChatCreated = (payload: any) => {
+      const item: ChatItem = {
+        chatId: payload.id,
+        clientId: payload.userId,
+        clientName: payload.clientName,
+        status: payload.status === "CLOSED" ? "FINISHED" : (payload.status as ChatStatus),
+        isOnline: true,
+        lastMessageTime: new Date(payload.updatedAt ?? payload.createdAt ?? Date.now()),
+        lastMessagePreview: payload.firstMessage?.content ?? "Nuevo chat",
       }
-    })
+      setChats((prev) => upsertChat(prev, item))
+    }
 
-    // Chat auto-asignado
-    socket.on("chatAutoAssigned", (data) => {
-      console.log("🚨 [CHAT-MANAGER] Chat auto-asignado:", data)
-
-      updateOrAddChat(
-        {
-          chatId: data.chatId,
-          clientId: data.clientId,
+    const onOperatorAssigned = (payload: any) => {
+      setChats((prev) =>
+        upsertChat(prev, {
+          ...(prev.find((c) => c.chatId === payload.chatId) ?? {
+            chatId: payload.chatId,
+            clientId: payload.userId ?? "unknown",
+            clientName: payload.clientName,
+            status: "ACTIVE",
+            isOnline: true,
+            lastMessageTime: new Date(),
+            lastMessagePreview: "",
+          }),
           status: "ACTIVE",
-        },
-        "Chat asignado automáticamente",
-      )
-
-      // Agregar historial si viene
-      if (data.history && data.history.length > 0) {
-        const historyMessages: Message[] = data.history.map((msg: any) => ({
-          id: msg.id,
-          content: msg.content,
-          sender: msg.sender,
-          timestamp: new Date(msg.timestamp),
-          chatId: msg.chatId,
-          senderName: getSenderName(msg.sender, msg.userId || msg.senderName),
-          type: msg.type || "TEXT",
-          imageUrl: msg.imageUrl,
-          options: msg.options, // 🆕 Agregar opciones si vienen
-        }))
-
-        setMessages((prev) => {
-          const filtered = prev.filter((m) => m.chatId !== data.chatId)
-          return [...filtered, ...historyMessages]
-        })
-      }
-
-      toast({
-        title: "Nuevo chat asignado",
-        description: `Cliente ${data.clientId.substring(0, 8)}... necesita ayuda`,
-      })
-    })
-
-    // Nuevo mensaje
-    socket.on("newMessage", (message) => {
-      console.log("💬 [CHAT-MANAGER] Nuevo mensaje:", message)
-
-      const newMessage: Message = {
-        id: message.id,
-        content: message.content,
-        sender: message.senderType,
-        timestamp: new Date(message.timestamp),
-        chatId: message.chatId,
-        senderName: getSenderName(message.senderType, message.userId),
-        type: message.type || "TEXT",
-        imageUrl: message.imageUrl,
-        options: message.options, // 🆕 Agregar opciones del bot
-      }
-
-      // Agregar mensaje
-      setMessages((prev) => {
-        const exists = prev.some((m) => m.id === message.id)
-        if (exists) return prev
-        return [...prev, newMessage]
-      })
-
-      // Actualizar último mensaje en el chat
-      setChats((prev) =>
-        prev.map((chat) => {
-          if (chat.chatId === message.chatId) {
-            return {
-              ...chat,
-              lastMessage: message.content,
-              lastMessageTime: new Date(message.timestamp),
-              unreadCount: message.senderType === "CLIENT" ? chat.unreadCount + 1 : chat.unreadCount,
-            }
-          }
-          return chat
         }),
       )
+    }
 
-      // Notificación si es mensaje de cliente
-      if (message.senderType === "CLIENT") {
-        toast({
-          title: "Nuevo mensaje",
-          description: `${getSenderName(message.senderType, message.userId)}: ${message.content.substring(0, 50)}...`,
-        })
+    const onNewMessage = (p: any) => {
+      const msg: ChatMessage = {
+        id: p.id ?? `m-${Date.now()}`,
+        chatId: p.chatId,
+        sender: p.sender === "OPERATOR" ? "OPERADOR" : p.sender,
+        content: p.content,
+        type: "TEXT",
+        timestamp: new Date(p.createdAt ?? Date.now()),
       }
-    })
-
-    // Historial del chat
-    socket.on("chatHistory", (data) => {
-      console.log("📚 [CHAT-MANAGER] Historial recibido:", data)
-
-      const historyMessages: Message[] = data.messages.map((msg: any) => ({
-        id: msg.id,
-        content: msg.content,
-        sender: msg.sender,
-        timestamp: new Date(msg.timestamp),
-        chatId: msg.chatId,
-        senderName: getSenderName(msg.sender, msg.userId || msg.senderName),
-        type: msg.type || "TEXT",
-        imageUrl: msg.imageUrl,
-        options: msg.options, // 🆕 Agregar opciones
-      }))
-
-      // Reemplazar mensajes del chat específico
-      setMessages((prev) => {
-        const otherMessages = prev.filter((m) => m.chatId !== data.chatId)
-        return [...otherMessages, ...historyMessages]
-      })
-    })
-
-    // Usuario escribiendo
-    socket.on("userTyping", (data) => {
-      console.log("⌨️ [CHAT-MANAGER] Usuario escribiendo:", data)
-
-      if (data.userId !== user?.id) {
-        setIsTyping(data.isTyping)
-        setTypingChatId(data.chatId)
-
-        if (data.isTyping) {
-          // Auto-clear typing después de 3 segundos
-          setTimeout(() => {
-            setIsTyping(false)
-            setTypingChatId(null)
-          }, 3000)
-        }
-      }
-    })
-
-    // Chat finalizado
-    socket.on("chatFinished", (data) => {
-      console.log("✅ [CHAT-MANAGER] Chat finalizado:", data)
-
+      setMessages((prev) => [...prev, msg])
       setChats((prev) =>
-        prev.map((chat) => {
-          if (chat.chatId === data.chatId) {
-            return {
-              ...chat,
-              status: "FINISHED" as const,
-              lastMessage: "Chat finalizado",
-              lastMessageTime: new Date(),
-            }
-          }
-          return chat
+        upsertChat(prev, {
+          ...(prev.find((c) => c.chatId === p.chatId) ?? {
+            chatId: p.chatId,
+            clientId: p.userId ?? "unknown",
+            clientName: p.clientName,
+            status: "ACTIVE",
+            isOnline: true,
+            lastMessageTime: msg.timestamp,
+            lastMessagePreview: msg.content,
+          }),
+          lastMessageTime: msg.timestamp,
+          lastMessagePreview: msg.content,
         }),
       )
+    }
 
-      toast({
-        title: "Chat finalizado",
-        description: "El chat ha sido finalizado exitosamente",
-      })
-    })
+    const onChatStatusChanged = (p: any) => {
+      setChats((prev) =>
+        prev.map((c) =>
+          c.chatId === p.chatId
+            ? { ...c, status: p.status === "CLOSED" ? "FINISHED" : (p.status as ChatStatus) }
+            : c,
+        ),
+      )
+    }
 
-    // Chat calificado
-    socket.on("chatRated", (data) => {
-      console.log("⭐ [CHAT-MANAGER] Chat calificado:", data)
+    const onTypingStart = (p: any) => {
+      setTypingChatId(p.chatId)
+      setIsTyping(true)
+    }
+    const onTypingStop = () => {
+      setTypingChatId(null)
+      setIsTyping(false)
+    }
 
-      toast({
-        title: "Nueva calificación",
-        description: `Recibiste ${data.rating} estrellas`,
-      })
-    })
-
-    // Errores
-    socket.on("error", (error) => {
-      console.error("❌ [CHAT-MANAGER] Error:", error)
-      toast({
-        title: "Error",
-        description: error.message || "Ha ocurrido un error",
-        variant: "destructive",
-      })
-    })
-
-    // Solicitar dashboard inicial
-    socket.emit("getStats")
+    socket.on("chatCreated", onChatCreated)
+    socket.on("operatorAssigned", onOperatorAssigned)
+    socket.on("newMessage", onNewMessage)
+    socket.on("chatStatusChanged", onChatStatusChanged)
+    socket.on("chatFinished", onChatStatusChanged)
+    socket.on("typingStart", onTypingStart)
+    socket.on("typingStop", onTypingStop)
 
     return () => {
-      console.log("🧹 [CHAT-MANAGER] Limpiando event listeners...")
-      socket.off("operatorDashboard")
-      socket.off("connectedUsersUpdate")
-      socket.off("chatAutoAssigned")
-      socket.off("newMessage")
-      socket.off("chatHistory")
-      socket.off("userTyping")
-      socket.off("chatFinished")
-      socket.off("chatRated")
-      socket.off("error")
+      socket.off("chatCreated", onChatCreated)
+      socket.off("operatorAssigned", onOperatorAssigned)
+      socket.off("newMessage", onNewMessage)
+      socket.off("chatStatusChanged", onChatStatusChanged)
+      socket.off("chatFinished", onChatStatusChanged)
+      socket.off("typingStart", onTypingStart)
+      socket.off("typingStop", onTypingStop)
     }
-  }, [socket, user?.id, getSenderName, updateOrAddChat, toast])
+  }, [socket])
 
-  // Funciones para interactuar con el chat
-  const joinChat = useCallback(
-    (chatId: string) => {
-      if (!socket) return
+  /** API para la página */
+  const joinChat = (chatId: string) => {
+    setTypingChatId(null)
+    setIsTyping(false)
+    if (!useMock) socket?.emit("joinChat", { chatId })
+  }
 
-      console.log("🚀 [CHAT-MANAGER] Uniéndose al chat:", chatId)
-      socket.emit("joinChat", { chatId })
+  const sendMessage = (chatId: string, content: string) => {
+    const out: ChatMessage = {
+      id: `tmp-${Date.now()}`,
+      chatId,
+      sender: "OPERADOR",
+      content,
+      type: "TEXT",
+      timestamp: new Date(),
+    }
+    setMessages((prev) => [...prev, out])
+    setChats((prev) =>
+      upsertChat(prev, {
+        ...(prev.find((c) => c.chatId === chatId)!),
+        lastMessagePreview: content,
+        lastMessageTime: out.timestamp,
+      }),
+    )
+    if (!useMock) socket?.emit("sendMessage", { chatId, content })
+  }
 
-      // Marcar como leído
-      setChats((prev) => prev.map((chat) => (chat.chatId === chatId ? { ...chat, unreadCount: 0 } : chat)))
-    },
-    [socket],
-  )
-
-  const sendMessage = useCallback(
-    (chatId: string, content: string) => {
-      if (!socket || !user?.id) return
-
-      console.log("📤 [CHAT-MANAGER] Enviando mensaje:", { chatId, content })
-      socket.emit("sendMessage", {
-        userId: user.id,
-        chatId,
-        content,
-      })
-    },
-    [socket, user?.id],
-  )
-
-  const finishChat = useCallback(
-    (chatId: string, reason = "Chat finalizado por el operador") => {
-      if (!socket) return
-
-      console.log("🏁 [CHAT-MANAGER] Finalizando chat:", chatId)
-      socket.emit("finishChat", {
-        chatId,
-        reason,
-      })
-    },
-    [socket],
-  )
-
-  const startTyping = useCallback(
-    (chatId: string) => {
-      if (!socket) return
-      socket.emit("typingStart", { chatId })
-    },
-    [socket],
-  )
-
-  const stopTyping = useCallback(
-    (chatId: string) => {
-      if (!socket) return
-      socket.emit("typingStop", { chatId })
-    },
-    [socket],
-  )
-
-  // Funciones para actualizar el chat
-  const markChatAsRead = useCallback((chatId: string) => {
-    setChats((prev) => prev.map((chat) => (chat.chatId === chatId ? { ...chat, unreadCount: 0 } : chat)))
-  }, [])
-
-  const updateChatStatus = useCallback((chatId: string, status: "ACTIVE" | "FINISHED" | "WAITING") => {
-    setChats((prev) => prev.map((chat) => (chat.chatId === chatId ? { ...chat, status } : chat)))
-  }, [])
+  const finishChat = (chatId: string) => {
+    if (useMock) {
+      // feedback visual inmediato en mock
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `sys-${Date.now()}`,
+          chatId,
+          sender: "SYSTEM",
+          content: "La conversación se finalizó. ¡Gracias por escribirnos!",
+          type: "TEXT",
+          timestamp: new Date(),
+        },
+      ])
+      setChats((prev) =>
+        prev.map((c) => (c.chatId === chatId ? { ...c, status: "FINISHED", isOnline: false } : c)),
+      )
+      return
+    }
+    socket?.emit("finishChat", { chatId })
+  }
 
   return {
-    // Estados
     chats,
     messages,
-    connectedClients,
-    isTyping: isTyping && typingChatId,
+    isTyping,
     typingChatId,
     isLoading,
-    isConnected,
-
-    // Funciones
+    isConnected: true, // en mock lo damos por conectado
     joinChat,
     sendMessage,
     finishChat,
-    startTyping,
-    stopTyping,
-    markChatAsRead,
-    updateChatStatus,
-
-    // Utilidades
-    getSenderName,
   }
 }
