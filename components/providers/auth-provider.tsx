@@ -1,220 +1,249 @@
-"use client"
+// src/components/providers/auth-provider.tsx
+"use client";
 
-import type React from "react"
-import { createContext, useContext, useState, useEffect } from "react"
+import type React from "react";
+import { createContext, useContext, useState, useEffect } from "react";
+import {
+  API_BASE,                 // misma base que usan los helpers
+  ensureOperatorForUser,    // POST /operators (sin fallback)
+  setOperatorState,         // PATCH /operators/:id/state
+} from "@/components/helpers/helper.assign";
 
-type AppRole = "CLIENT" | "OPERADOR" | "ADMIN"
+type AppRole = "CLIENT" | "OPERADOR" | "ADMIN";
 
 interface User {
-  id: string
-  name?: string
-  dni: number
-  role: "CLIENT" | "OPERADOR" | "ADMIN"
-  email?: string
-}
-interface RegisterBody {
-  name: string;
+  id: string;
+  name?: string;
   dni: number;
-  password: string;
-  role: string;
- 
+  role: AppRole;
+  email?: string;
 }
 
 interface AuthContextType {
-  user: User | null
-  token: string | null
-  isLoading: boolean
-  login: (dni: number, password: string) => Promise<void>
-  register: (name: string,dni: number, password: string, role: string) => Promise<void>
-  logout: () => void
-  isTokenValid: () => boolean
-  refreshToken: () => Promise<void>
+  user: User | null;
+  token: string | null;
+  isLoading: boolean;
+  login: (dni: number, password: string) => Promise<void>;
+  register: (name: string, dni: number, password: string, role: string) => Promise<void>;
+  logout: () => void;
+  isTokenValid: () => boolean;
+  refreshToken: () => Promise<void>;
 }
 
-export const AuthContext = createContext<AuthContextType | undefined>(undefined)
+export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function getApiUrl(): string {
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:3002"
-}
-
+/* ================= utils ================= */
 function isTokenExpired(token: string): boolean {
   try {
-    const payload = JSON.parse(atob(token.split(".")[1]))
-    const now = Date.now() / 1000
-    return payload.exp < now
-  } catch (error) {
-    console.error("❌ [AUTH] expired token", error)
-    return true
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return payload.exp < Date.now() / 1000;
+  } catch {
+    return true;
   }
 }
 
 function normalizeRole(raw?: string): AppRole {
-  const r = (raw || "").toUpperCase().trim()
-  if (r === "ADMIN") return "ADMIN"
-  if (r.includes("OPER")) return "OPERADOR"
-  return "CLIENT"
+  const r = (raw || "").toUpperCase().trim();
+  if (r.includes("ADMIN")) return "ADMIN";
+  if (r.includes("OPER")) return "OPERADOR";
+  return "CLIENT";
 }
 
+async function readJsonSafe(res: Response) {
+  const txt = await res.text();
+  try {
+    return txt ? JSON.parse(txt) : {};
+  } catch {
+    return {};
+  }
+}
+
+function extractUserLike(data: any) {
+  return data?.user ?? data?.operator ?? data?.data?.user ?? data?.data?.operator ?? null;
+}
+
+function extractToken(data: any) {
+  return data?.access_token ?? data?.token ?? data?.data?.access_token ?? data?.data?.token;
+}
+
+/** Por defecto NO forzar: solo crear operador si el rol es OPERADOR.
+ *  Si querés forzar, poné NEXT_PUBLIC_FORCE_OPERATOR_ENSURE=1 en .env.local
+ */
+const FORCE_OPERATOR_ENSURE =
+  (process.env.NEXT_PUBLIC_FORCE_OPERATOR_ENSURE ?? "0") === "1";
+
+/* =============== provider =============== */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
-  const [token, setToken] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const clearAuth = () => {
-    setUser(null)
-    setToken(null)
-    ;(["CLIENT","OPERADOR","ADMIN"] as AppRole[]).forEach(r => {
-      localStorage.removeItem(`authToken-${r}`)
-      localStorage.removeItem(`user-${r}`)
-    })
-    localStorage.removeItem("token")
-    localStorage.removeItem("user")
-  }
+    setUser(null);
+    setToken(null);
+    (["CLIENT", "OPERADOR", "ADMIN"] as AppRole[]).forEach((r) => {
+      localStorage.removeItem(`authToken-${r}`);
+      localStorage.removeItem(`user-${r}`);
+    });
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    localStorage.removeItem("userId");
+    localStorage.removeItem("operatorId");
+  };
 
-  const isTokenValid = (): boolean => !!token && !isTokenExpired(token)
+  const storeAuth = (u: User, tok: string) => {
+    setUser(u);
+    setToken(tok);
+    localStorage.setItem(`authToken-${u.role}`, tok);
+    localStorage.setItem(`user-${u.role}`, JSON.stringify(u));
+    localStorage.setItem("token", tok);
+    localStorage.setItem("user", JSON.stringify(u));
+    localStorage.setItem("userId", u.id);
+  };
+
+  const isTokenValid = () => !!token && !isTokenExpired(token!);
 
   const refreshToken = async () => {
-    if (!user) return
+    if (!user || !token) return;
     try {
-      const res = await fetch(`${getApiUrl()}/auth/refresh`, {
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error("Token refresh failed")
-      const data = await res.json()
-      const newToken = data.access_token || data.token
-      setToken(newToken)
-      localStorage.setItem(`authToken-${user.role}`, newToken)
-      localStorage.setItem("token", newToken)
+      });
+      if (!res.ok) throw new Error("Token refresh failed");
+      const data = await readJsonSafe(res);
+      const newToken = extractToken(data);
+      if (!newToken) throw new Error("No token on refresh");
+      storeAuth(user, newToken);
     } catch {
-      clearAuth()
+      clearAuth();
     }
-  }
+  };
 
   useEffect(() => {
     const tryLoad = (role: AppRole) => {
-      const tok = localStorage.getItem(`authToken-${role}`)
-      const usr = localStorage.getItem(`user-${role}`)
-      if (!tok || !usr) return false
+      const tok = localStorage.getItem(`authToken-${role}`);
+      const usr = localStorage.getItem(`user-${role}`);
+      if (!tok || !usr) return false;
       try {
-        const u: User = JSON.parse(usr)
-        u.role = normalizeRole(u.role)
+        const u: User = JSON.parse(usr);
+        u.role = normalizeRole(u.role);
         if (!isTokenExpired(tok)) {
-          setToken(tok)
-          setUser(u)
-          localStorage.setItem("token", tok)
-          localStorage.setItem("user", JSON.stringify(u))
-          return true
+          storeAuth(u, tok);
+          return true;
         }
       } catch {}
-      return false
-    }
-    if (!tryLoad("CLIENT")) if (!tryLoad("OPERADOR")) tryLoad("ADMIN")
-    setIsLoading(false)
-  }, [])
+      return false;
+    };
+    if (!tryLoad("CLIENT")) if (!tryLoad("OPERADOR")) tryLoad("ADMIN");
+    setIsLoading(false);
+  }, []);
 
-const login = async (dni: number, password: string) => {
-  console.log("🔐 [AUTH] Intentando login con:", { dni, passwordLength: password.length })
-
-  const response = await fetch(`${getApiUrl()}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dni, password }),
-  })
-
-  console.log("📤 [AUTH] Response status:", response.status)
-
-  if (!response.ok) {
-    let errorData
+  /** Crea/asegura el operador en /operators y lo deja AVAILABLE (sin fallback) */
+  const ensureAndBootOperator = async (
+    name: string | undefined,
+    dni: number,
+    password: string,
+    role?: string
+  ) => {
     try {
-      errorData = await response.json()
-    } catch (err) {
-      console.error("❌ [AUTH] Error parseando JSON de error:", err)
+      // Evitar duplicado si ya lo hicimos antes en el mismo flujo
+      if (localStorage.getItem("operatorId")) return;
+
+      const operatorId = await ensureOperatorForUser({
+        name: name || "Operador Seed",
+        dni,
+        password: password || "Temporal-123",
+        role: role || "OPERADOR",
+        isAvailable: true,
+      });
+
+      localStorage.setItem("operatorId", operatorId);
+      await setOperatorState(operatorId, "AVAILABLE").catch(() => {});
+      console.log("[AUTH] Operator creado en /operators y puesto AVAILABLE:", operatorId);
+    } catch (e: any) {
+      console.error("[AUTH] ensureAndBootOperator falló:", e?.message || e);
+      // Sin fallback: si rompe, preferimos visibilidad en consola.
     }
-    console.error("❌ [AUTH] Login falló:", errorData || "Unknown error")
-    throw new Error(errorData?.message || "Error en el login")
-  }
+  };
 
-  const data = await response.json()
-  console.log("✅ [AUTH] Login exitoso, datos recibidos:", data)
-
-  const accessToken = data.access_token || data.token
-  if (!accessToken) {
-    console.error("❌ [AUTH] No se recibió token")
-    throw new Error("No se recibió token")
-  }
-
-  const userData: User = {
-    id: data.user.id,
-    name: data.user.name,
-    dni: data.user.dni,
-    role: data.user.role.toUpperCase() as User["role"],
-  }
-
-  clearAuth()
-  setUser(userData)
-  setToken(accessToken)
-
-  localStorage.setItem(`authToken-${userData.role}`, accessToken)
-  localStorage.setItem(`user-${userData.role}`, JSON.stringify(userData))
-  localStorage.setItem("token", accessToken)
-  localStorage.setItem("user", JSON.stringify(userData))
-
-  console.log("🎫 [AUTH] Token y usuario guardados correctamente")
-}
-
-
-  const register = async (name: string, dni: number, password: string, role: string) => {
-    const endpoint = role === "OPERADOR" ? "/operators" : "/auth/register"
-
-    const body: RegisterBody = {
-      name,
-  dni,
-  password,
-  role,
-};
-
-
-
-    const res = await fetch(`${getApiUrl()}/auth/register`, {
+  const login = async (dni: number, password: string) => {
+    const response = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      let message = "Error en el registro"
-      try {
-        const e = await res.json()
-        message = Array.isArray(e?.message) ? e.message.join(", ") : (e?.message || message)
-      } catch {}
-      throw new Error(message)
+      body: JSON.stringify({ dni, password }),
+    });
+
+    if (!response.ok) {
+      const e = await readJsonSafe(response);
+      throw new Error(e?.message || "Error en el login");
     }
 
-    const data = await res.json()
-    const accessToken = data.access_token || data.token
-    if (!accessToken) throw new Error("No se recibió token")
+    const data = await readJsonSafe(response);
+    const tok = extractToken(data);
+    if (!tok) throw new Error("No se recibió token");
 
-    const roleResp = normalizeRole(data?.user?.role || role)
+    const rawUser = extractUserLike(data);
     const userData: User = {
-      id: data.user.id,
-      name: data.user.name,
-      dni: data.user.dni,
-      role: data.user.role.toUpperCase() as User["role"],
+      id: String(rawUser?.id ?? rawUser?._id ?? rawUser?.uid ?? dni),
+      name: rawUser?.name,
+      dni: Number(rawUser?.dni ?? dni),
+      role: normalizeRole(rawUser?.role),
+      email: rawUser?.email,
+    };
+
+    clearAuth();
+    storeAuth(userData, tok);
+
+    // Solo asegurar operador si es OPERADOR (o si se fuerza por flag)
+    if (userData.role === "OPERADOR" || FORCE_OPERATOR_ENSURE) {
+      await ensureAndBootOperator(userData.name, userData.dni, password, userData.role);
+    }
+  };
+
+  const register = async (name: string, dni: number, password: string, role: string) => {
+    const res = await fetch(`${API_BASE}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, dni, password, role }),
+    });
+
+    if (!res.ok) {
+      const e = await readJsonSafe(res);
+      const msg = Array.isArray(e?.message) ? e.message.join(", ") : e?.message || "Error en el registro";
+      throw new Error(msg);
     }
 
-    clearAuth()
-    setUser(userData)
-    setToken(accessToken)
-    localStorage.setItem(`authToken-${userData.role}`, accessToken)
-    localStorage.setItem(`user-${userData.role}`, JSON.stringify(userData))
-    localStorage.setItem("token", accessToken)
-    localStorage.setItem("user", JSON.stringify(userData))
-  }
+    const data = await readJsonSafe(res);
+    const tok = extractToken(data);
+    const rawUser = extractUserLike(data);
+
+    // Si /auth/register no devuelve token, hacemos login y seguimos flujo normal.
+    if (!tok) {
+      await login(dni, password);
+      return;
+    }
+
+    const userData: User = {
+      id: String(rawUser?.id ?? rawUser?._id ?? dni),
+      name: rawUser?.name ?? name,
+      dni: Number(rawUser?.dni ?? dni),
+      role: normalizeRole(rawUser?.role ?? role),
+      email: rawUser?.email,
+    };
+
+    clearAuth();
+    storeAuth(userData, tok);
+
+    if (userData.role === "OPERADOR" || FORCE_OPERATOR_ENSURE) {
+      await ensureAndBootOperator(userData.name, userData.dni, password, userData.role);
+    }
+  };
 
   const logout = () => {
-    localStorage.removeItem("client-chat-id")
-    clearAuth()
-  }
+    localStorage.removeItem("client-chat-id");
+    clearAuth();
+  };
 
   return (
     <AuthContext.Provider
@@ -222,24 +251,11 @@ const login = async (dni: number, password: string) => {
     >
       {children}
     </AuthContext.Provider>
-  )
+  );
 }
 
 export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (!ctx) throw new Error("useAuth must be used within an AuthProvider")
-  return ctx
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
+  return ctx;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

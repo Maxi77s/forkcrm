@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
 import { ChatMessage } from "./chat-message"
 import {
   Send,
@@ -24,7 +23,6 @@ import {
 import type {
   Message as ChatMsgFromTypes,
   ChatInfo,
-  ChatOption,
 } from "@/types/chats"
 
 /** Tipo local compatible con ChatMessage (sin "OPTIONS") */
@@ -50,31 +48,33 @@ export function ChatInterface({
   onFinishChat,
   onStartTyping,
   onStopTyping,
-  onTransferChat,
+  onTransferChat, // eslint-disable-line @typescript-eslint/no-unused-vars
   isConnected,
 }: ChatInterfaceProps) {
   const [inputMessage, setInputMessage] = useState("")
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
+  // ⬇️ Auto-scroll al fondo cuando cambia la lista
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
   }, [messages])
 
-  // Normalizar mensajes para ChatMessage
-  const displayMessages: DisplayMessage[] = useMemo(
-    () =>
-      messages
-        .filter((m) => m.type !== "OPTIONS")
-        .map((m) => ({ ...(m as any), type: m.type as "TEXT" | "IMAGE" })),
-    [messages],
-  )
+  // ⬇️ Normalizar y ORDENAR ASC por fecha (viejos arriba → nuevos abajo)
+  const displayMessages: DisplayMessage[] = useMemo(() => {
+    const base = messages
+      .filter((m) => m.type !== "OPTIONS")
+      .map((m) => ({ ...(m as any), type: m.type as "TEXT" | "IMAGE" }))
+
+    return base.sort((a, b) => {
+      const ta = new Date(a.timestamp as any).getTime()
+      const tb = new Date(b.timestamp as any).getTime()
+      return ta - tb
+    })
+  }, [messages])
 
   const lastClientMessage = useMemo(
-    () =>
-      [...displayMessages]
-        .reverse()
-        .find((m) => m.sender === "CLIENT" && m.type === "TEXT"),
+    () => [...displayMessages].reverse().find((m) => m.sender === "CLIENT" && m.type === "TEXT"),
     [displayMessages],
   )
 
@@ -120,13 +120,8 @@ export function ChatInterface({
           <div className="bg-white rounded-full p-6 shadow-lg mb-6">
             <Clock className="h-16 w-16 mx-auto text-sky-500" />
           </div>
-          <h3 className="text-2xl font-bold text-gray-800 mb-2">
-            Selecciona un chat
-          </h3>
-          <p className="text-gray-600 max-w-md">
-            Elige una conversación de la lista para comenzar a chatear con el
-            cliente
-          </p>
+          <h3 className="text-2xl font-bold text-gray-800 mb-2">Selecciona un chat</h3>
+          <p className="text-gray-600 max-w-md">Elige una conversación de la lista para comenzar a chatear con el cliente</p>
         </CardContent>
       </Card>
     )
@@ -134,10 +129,9 @@ export function ChatInterface({
 
   return (
     <Card className="h-full flex flex-col border-0 rounded-none bg-white">
-      {/* ======= CABECERA estilo mock ======= */}
+      {/* ======= CABECERA ======= */}
       <CardHeader className="border-b bg-[#0f172a] text-white pb-5">
         <div className="flex items-start gap-4">
-          {/* Col: Avatar + nombre */}
           <div className="flex items-center gap-3">
             <Avatar className="h-10 w-10 ring-2 ring-white/20">
               <AvatarFallback className="bg-slate-200 text-slate-700">
@@ -146,13 +140,10 @@ export function ChatInterface({
             </Avatar>
             <div className="leading-tight">
               <p className="font-semibold">{chatInfo.clientName ?? "Cliente"}</p>
-              <p className="text-xs text-slate-300">
-                {formatLastSeen(chatInfo.lastSeen)}
-              </p>
+              <p className="text-xs text-slate-300">{formatLastSeen(chatInfo.lastSeen)}</p>
             </div>
           </div>
 
-          {/* Píldora origen WhatsApp */}
           <div className="ml-auto">
             <span className="inline-flex items-center gap-2 px-3 py-1 rounded-md text-xs font-semibold bg-emerald-600/20 text-emerald-300 border border-emerald-500/30">
               <MessageSquareText className="h-3.5 w-3.5" />
@@ -161,12 +152,9 @@ export function ChatInterface({
           </div>
         </div>
 
-        {/* Panel de conversación tipo “tarjeta” */}
         <div className="mt-4 rounded-xl border border-white/15 bg-white/5 p-4">
           <div className="flex items-center justify-between">
-            <p className="font-semibold">
-              {chatInfo.clientName ?? "Santiago"}:
-            </p>
+            <p className="font-semibold">{chatInfo.clientName ?? "Santiago"}:</p>
             <Avatar className="h-7 w-7 ring-2 ring-white/20">
               <AvatarFallback className="bg-slate-200 text-slate-700">
                 <Bot className="h-4 w-4" />
@@ -178,7 +166,6 @@ export function ChatInterface({
             NRO. de contacto <span className="font-mono">—</span>
           </p>
 
-          {/* Burbuja del último mensaje del cliente (si existe) */}
           {lastClientMessage?.content && (
             <div className="mt-3">
               <div className="inline-block max-w-[640px] rounded-lg bg-white/10 px-3 py-2 text-sm text-slate-100">
@@ -187,11 +174,8 @@ export function ChatInterface({
             </div>
           )}
 
-          {/* Pregunta + botones rápidos */}
           <div className="mt-3">
-            <div className="text-xs text-slate-300 mb-2">
-              ¿En qué sede te deseas atender?
-            </div>
+            <div className="text-xs text-slate-300 mb-2">¿En qué sede te deseas atender?</div>
             <div className="flex flex-wrap gap-2">
               {["Mega plaza", "Surco", "Otro"].map((label) => (
                 <Button
@@ -209,7 +193,6 @@ export function ChatInterface({
           </div>
         </div>
 
-        {/* Acciones de cabecera (derecha abajo) */}
         <div className="mt-4 flex items-center gap-2">
           <Button size="sm" variant="secondary" className="bg-white/10 text-white hover:bg-white/20">
             <Phone className="h-4 w-4 mr-2" />
@@ -239,48 +222,25 @@ export function ChatInterface({
               <div className="bg-white rounded-full p-4 shadow-lg mb-4 inline-block">
                 <Bot className="h-8 w-8 text-purple-500" />
               </div>
-              <h4 className="text-lg font-semibold text-gray-700 mb-2">
-                ¡Conversación iniciada!
-              </h4>
+              <h4 className="text-lg font-semibold text-gray-700 mb-2">¡Conversación iniciada!</h4>
               <p className="text-gray-500">Los mensajes aparecerán aquí</p>
             </div>
           )}
 
           {displayMessages.map((message) => (
+            // 👇 Operador IZQ / Cliente DER (tu ChatMessage ya lo maneja con isOwn basado en sender)
             <ChatMessage key={message.id} message={message} currentUserId="OPERADOR" />
           ))}
 
-          {isTyping && (
-            <div className="flex justify-start mb-4">
-              <div className="bg-gradient-to-r from-gray-100 to-gray-200 rounded-2xl px-4 py-3 max-w-xs shadow-sm">
-                <div className="flex items-center space-x-2">
-                  <div className="flex space-x-1">
-                    <div className="w-2 h-2 rounded-full animate-bounce bg-gray-400" />
-                    <div className="w-2 h-2 rounded-full animate-bounce bg-gray-400" style={{ animationDelay: "150ms" }} />
-                    <div className="w-2 h-2 rounded-full animate-bounce bg-gray-400" style={{ animationDelay: "300ms" }} />
-                  </div>
-                  <span className="text-xs text-gray-500 font-medium">
-                    Escribiendo...
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
+          {/* 👇 Sentinela: usado por ChatMessage para anclar al fondo cuando llega un CLIENT */}
+          <div ref={messagesEndRef} id="chat-bottom-anchor" />
         </div>
       </ScrollArea>
 
       {/* ======= INPUT ======= */}
       <div className="border-t bg-white p-4">
         <form onSubmit={handleSubmit} className="flex items-center space-x-3">
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            disabled={!isConnected}
-            className="hover:bg-slate-100"
-          >
+          <Button type="button" size="icon" variant="ghost" disabled={!isConnected} className="hover:bg-slate-100">
             <Paperclip className="h-5 w-5" />
           </Button>
 

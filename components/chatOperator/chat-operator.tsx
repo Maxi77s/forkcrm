@@ -1,4 +1,4 @@
-"use client"; // componente actual en uso 
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -19,14 +19,13 @@ import {
   VideoOff,
   Mic,
   MicOff,
-  MessageSquare,
+  MessageCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/providers/auth-provider";
 import { ChatList } from "@/components/chat/chat-list";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { useChatOperator } from "@/hooks/use-chat-operator";
-
 import Swal from "sweetalert2";
 import "sweetalert2/dist/sweetalert2.min.css";
 
@@ -34,36 +33,81 @@ const onlyDigits = (n?: string) => (n ?? "").replace(/[^\d]/g, "");
 
 export default function ChatOperator() {
   const { user } = useAuth();
-  const token = (user as any)?.token as string | undefined;
 
   const {
-    state: { loading, chatPreviews, selectedChatId, messages, message, localSending, fileRef, current },
-    actions: { setSelectedChatId, setMessage, handleSend, handlePickImage, handleImageSelected, finishChat },
-  } = useChatOperator({ token });
+    state: {
+      loading,
+      chatPreviews,
+      selectedChatId,
+      messages,
+      message,
+      localSending,
+      fileRef,
+      current,
+    },
+    actions: {
+      setSelectedChatId,
+      setMessage,
+      handleSend,
+      handlePickImage,
+      handleImageSelected,
+      finishChat,
+    },
+  } = useChatOperator({} as any);
 
+  // Enlaces rápidos (tel/wa)
   const e164 = onlyDigits(current?.phone);
   const telHref = e164 ? `tel:+${e164}` : undefined;
   const waChatHref = e164 ? `https://wa.me/${e164}` : undefined;
   const waCallHref = e164 ? `whatsapp://call?phone=${e164}` : undefined;
   const waVideoHref = e164 ? `whatsapp://video?phone=${e164}` : undefined;
 
+  // Controles mic/cam
   const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(false);
   const micStreamRef = useRef<MediaStream | null>(null);
   const camStreamRef = useRef<MediaStream | null>(null);
-  const stopStream = (s: MediaStream | null) => s?.getTracks().forEach((t) => t.stop());
+  const stopStream = (s: MediaStream | null) =>
+    s?.getTracks().forEach((t) => t.stop());
 
   const toggleMic = async () => {
-    if (micOn) { stopStream(micStreamRef.current); micStreamRef.current = null; setMicOn(false); return; }
-    try { micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true }); setMicOn(true); }
-    catch { setMicOn(false); }
+    if (micOn) {
+      stopStream(micStreamRef.current);
+      micStreamRef.current = null;
+      setMicOn(false);
+      return;
+    }
+    try {
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      setMicOn(true);
+    } catch {
+      setMicOn(false);
+    }
   };
   const toggleCam = async () => {
-    if (camOn) { stopStream(camStreamRef.current); camStreamRef.current = null; setCamOn(false); return; }
-    try { camStreamRef.current = await navigator.mediaDevices.getUserMedia({ video: true }); setCamOn(true); }
-    catch { setCamOn(false); }
+    if (camOn) {
+      stopStream(camStreamRef.current);
+      camStreamRef.current = null;
+      setCamOn(false);
+      return;
+    }
+    try {
+      camStreamRef.current = await navigator.mediaDevices.getUserMedia({
+        video: true,
+      });
+      setCamOn(true);
+    } catch {
+      setCamOn(false);
+    }
   };
-  useEffect(() => () => { stopStream(micStreamRef.current); stopStream(camStreamRef.current); }, []);
+  useEffect(() => {
+    return () => {
+      stopStream(micStreamRef.current);
+      stopStream(camStreamRef.current);
+    };
+  }, []);
 
   const confirmFinish = async () => {
     if (!current) return;
@@ -88,25 +132,38 @@ export default function ChatOperator() {
     }
   };
 
+  // Solo por si querés usar badge de canal más adelante
+  const renderChannelBadge = () => null;
+
   return (
     <div className="grid h-[calc(100dvh-2rem)] w-full gap-4 md:grid-cols-[340px_1fr]">
-      {/* Izquierda */}
+      {/* Columna izquierda */}
       <Card className="flex flex-col overflow-hidden">
         <CardHeader className="pb-3">
           <div className="flex items-center gap-3">
             <Avatar className="h-10 w-10">
-              <AvatarImage src={undefined} alt="Administrador" />
-              <AvatarFallback><User className="h-5 w-5" /></AvatarFallback>
+              <AvatarImage src={undefined} alt="Operador" />
+              <AvatarFallback>
+                <User className="h-5 w-5" />
+              </AvatarFallback>
             </Avatar>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <p className="truncate text-sm font-medium leading-none">{user?.name ?? "Administrador"}</p>
-                <Badge variant="secondary" className="h-5 text-[11px]">{(user as any)?.role ?? "ADMIN"}</Badge>
+                <p className="truncate text-sm font-medium leading-none">
+                  {user?.name ?? "Operador"}
+                </p>
+                <Badge variant="secondary" className="h-5 text-[11px]">
+                  {(user as any)?.role ?? "OPERADOR"}
+                </Badge>
               </div>
-              <p className="truncate text-xs text-muted-foreground">{(user as any)?.email ?? "admin@example.com"}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {(user as any)?.email ?? "operador@example.com"}
+              </p>
             </div>
           </div>
+          {/* Botones de "Tomar siguiente" eliminados: auto-assign en el hook */}
         </CardHeader>
+
         <Separator />
         <CardContent className="p-0 flex-1">
           <ChatList
@@ -118,24 +175,42 @@ export default function ChatOperator() {
         </CardContent>
       </Card>
 
-      {/* Derecha */}
+      {/* Columna derecha */}
       <Card className="flex min-h-0 flex-col overflow-hidden">
         <CardHeader className="sticky top-0 z-20 bg-white border-b p-4">
           <div className="flex items-center w-full gap-3 flex-nowrap">
-            {/* Avatar */}
+            {/* 🔧 FIX: AvatarFallback dentro de Avatar */}
             <Avatar className="h-8 w-8 flex-shrink-0">
-              {current?.avatar ? <AvatarImage src={current.avatar} alt={current?.clientName ?? "Cliente"} /> : null}
-              <AvatarFallback>{(current?.clientName?.[0] ?? "C").toUpperCase()}</AvatarFallback>
+              {current?.avatar ? (
+                <AvatarImage
+                  src={current.avatar}
+                  alt={current?.clientName ?? "Cliente"}
+                />
+              ) : null}
+              <AvatarFallback>
+                {(current?.clientName?.[0] ?? "C").toUpperCase()}
+              </AvatarFallback>
             </Avatar>
 
-            {/* Nombre y estado (AHORA inmediatamente al lado del avatar) */}
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium leading-none">
-                {current ? current.clientName ?? `Cliente ${current.clientId.slice(0, 8)}…` : "Selecciona un chat"}
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="truncate text-sm font-medium leading-none">
+                  {current
+                    ? current.clientName ??
+                      `Cliente ${current.clientId.slice(0, 8)}…`
+                    : "Selecciona un chat"}
+                </p>
+                {renderChannelBadge()}
+              </div>
+
               {current && (
                 <div className="flex items-center gap-2">
-                  <span className={cn("h-2 w-2 rounded-full", current.isOnline ? "bg-green-500" : "bg-zinc-400")} />
+                  <span
+                    className={cn(
+                      "h-2 w-2 rounded-full",
+                      current.isOnline ? "bg-green-500" : "bg-zinc-400"
+                    )}
+                  />
                   <span className="text-xs text-muted-foreground">
                     {current.isOnline ? "En línea" : "Desconectado"}
                   </span>
@@ -143,35 +218,57 @@ export default function ChatOperator() {
               )}
             </div>
 
-            {/* Teléfono (después del nombre) */}
             {current?.phone && (
               <Badge variant="outline" className="font-mono text-xs flex-shrink-0">
                 +{onlyDigits(current.phone)}
               </Badge>
             )}
 
-            {/* Acciones a la derecha */}
             <div className="ml-auto flex items-center gap-2 flex-shrink-0">
               {waChatHref && (
-                <Button size="sm" variant="outline" asChild title="Abrir chat en WhatsApp">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  asChild
+                  title="Abrir chat en WhatsApp"
+                >
                   <a href={waChatHref} target="_blank" rel="noopener noreferrer">
-                    <MessageSquare className="h-4 w-4" /><span className="ml-1 text-xs">WA</span>
+                    <MessageCircle className="h-4 w-4" />
+                    <span className="ml-1 text-xs">WA</span>
                   </a>
                 </Button>
               )}
               {telHref && (
                 <Button size="sm" variant="outline" asChild title="Llamar (teléfono)">
-                  <a href={telHref}><Phone className="h-4 w-4" /></a>
+                  <a href={telHref}>
+                    <Phone className="h-4 w-4" />
+                  </a>
                 </Button>
               )}
               {waCallHref && (
-                <Button size="sm" variant="outline" asChild title="Llamada de WhatsApp (app)">
-                  <a href={waCallHref}><PhoneCall className="h-4 w-4" /><span className="ml-1 text-xs">WA</span></a>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  asChild
+                  title="Llamada de WhatsApp (app)"
+                >
+                  <a href={waCallHref}>
+                    <PhoneCall className="h-4 w-4" />
+                    <span className="ml-1 text-xs">WA</span>
+                  </a>
                 </Button>
               )}
               {waVideoHref && (
-                <Button size="sm" variant="outline" asChild title="Videollamada de WhatsApp (app)">
-                  <a href={waVideoHref}><Video className="h-4 w-4" /><span className="ml-1 text-xs">WA</span></a>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  asChild
+                  title="Videollamada de WhatsApp (app)"
+                >
+                  <a href={waVideoHref}>
+                    <Video className="h-4 w-4" />
+                    <span className="ml-1 text-xs">WA</span>
+                  </a>
                 </Button>
               )}
               <Button
@@ -215,8 +312,14 @@ export default function ChatOperator() {
                 </p>
               )}
               {messages.map((m) => (
-                <ChatMessage key={m.id} message={m as any} currentUserId={(user as any)?.id} />
+                <ChatMessage
+                  key={m.id}
+                  message={m as any}
+                  currentUserId={(user as any)?.id}
+                  clientAvatarUrl={current?.avatar}
+                />
               ))}
+              <div id="chat-bottom-anchor" />
             </div>
           </ScrollArea>
 
@@ -235,12 +338,32 @@ export default function ChatOperator() {
                 }}
                 disabled={!current || localSending}
               />
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelected} />
-              <Button type="button" variant="outline" onClick={handlePickImage} disabled={!current || localSending} title="Adjuntar imagen">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleImageSelected}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handlePickImage}
+                disabled={!current || localSending}
+                title="Adjuntar imagen"
+              >
                 <ImageIcon className="h-4 w-4" />
               </Button>
-              <Button type="button" onClick={handleSend} disabled={!current || !message.trim() || localSending}>
-                {localSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              <Button
+                type="button"
+                onClick={handleSend}
+                disabled={!current || !message.trim() || localSending}
+              >
+                {localSending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
               </Button>
             </div>
           </div>

@@ -1,4 +1,4 @@
-
+// src/components/auth/login-form.tsx
 "use client"
 
 import type React from "react"
@@ -6,61 +6,57 @@ import { useState } from "react"
 import { useAuth } from "@/components/providers/auth-provider"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Card, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2 } from 'lucide-react'
+import { Loader2 } from "lucide-react"
 import Image from "next/image"
-import Link from "next/link"
+
+// Helpers /operators
+import {
+  createOperatorDirect,
+  setOperatorState,
+} from "@/components/helpers/helper.assign"
+
+function normalizeRole(r?: string) {
+  return (r || "").toUpperCase().trim()
+}
+
+function getApiBase() {
+  return (
+    process.env.NEXT_PUBLIC_API_URL ||
+    process.env.NEXT_PUBLIC_ECOM_BASE_URL ||
+    "http://localhost:3002"
+  )
+}
 
 export function LoginForm() {
-  const { login, register } = useAuth()
+  const { login } = useAuth()
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
   const [rememberMe, setRememberMe] = useState(false)
-  
-  const [loginData, setLoginData] = useState({ 
-    dni:'', 
-    password: "" 
-  })
-  
+
+  const [loginData, setLoginData] = useState({ dni: "", password: "" })
   const [registerData, setRegisterData] = useState({
     name: "",
-    dni:"",
+    email: "",
+    dni: "",
     password: "",
-    role: "CLIENT",
+    role: "CLIENT", // CLIENT | OPERADOR
   })
 
+  /* ======================= LOGIN ======================= */
   const handleLogin = async (e: React.FormEvent) => {
-    console.log("🔐 [LOGIN-FORM] Intentando login con:", {
-  dni: loginData.dni,
-  passwordLength: loginData.password.length,
-  rememberMe,
-});
     e.preventDefault()
     setIsLoading(true)
-    
     try {
-      console.log("🔐 [LOGIN-FORM] Iniciando login con dni:", loginData.dni)
-      
-     const dniNumber = Number(loginData.dni)
+      const dniNumber = Number(loginData.dni)
+      await login(dniNumber, loginData.password)
 
-    await login(dniNumber, loginData.password)
-      
-      if (rememberMe) {
-        localStorage.setItem("remember-dni", loginData.dni.toString())
-        console.log("💾 [LOGIN-FORM] dni guardado en localStorage:", loginData.dni)
-      }
-      
-      console.log("✅ [LOGIN-FORM] Login exitoso")
-      toast({
-        title: "¡Bienvenido!",
-        description: "Has iniciado sesión correctamente",
-      })
+      if (rememberMe) localStorage.setItem("remember-dni", loginData.dni.toString())
+      toast({ title: "¡Bienvenido!", description: "Has iniciado sesión correctamente" })
     } catch (error: any) {
-      console.error("❌ [LOGIN-FORM] Error en login:", error)
       toast({
         title: "Error de autenticación",
         description: error?.message || "Credenciales incorrectas",
@@ -71,106 +67,130 @@ export function LoginForm() {
     }
   }
 
-  const handleGoogleLogin = async () => {
-    setIsLoading(true)
-    try {
-      // Implementar login con Google aquí
+  /* ======================= REGISTER ======================= */
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    // Validaciones básicas
+    if (!registerData.name || !registerData.dni || !registerData.password) {
       toast({
-        title: "Próximamente",
-        description: "Login con Google estará disponible pronto",
-      })
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: "No se pudo iniciar sesión con Google",
+        title: "Campos incompletos",
+        description: "Por favor completa nombre, DNI y contraseña",
         variant: "destructive",
       })
+      return
+    }
+
+    const dniRegex = /^\d{8}$/
+    if (!dniRegex.test(registerData.dni)) {
+      toast({
+        title: "DNI inválido",
+        description: "El DNI debe tener exactamente 8 dígitos",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const roleNormalized = normalizeRole(registerData.role)
+
+    // 👉 Ahora exigimos email para ambos roles (tu backend de /operators lo pide)
+    if (!registerData.email) {
+      toast({
+        title: "Email requerido",
+        description: "El email es obligatorio",
+        variant: "destructive",
+      })
+      return
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(registerData.email)) {
+      toast({
+        title: "Email inválido",
+        description: "Revisa el formato del correo electrónico",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const dniNumber = Number(registerData.dni)
+      const email = registerData.email.trim().toLowerCase()
+
+      if (roleNormalized === "OPERADOR") {
+        // 👉 OPERADOR: ahora enviamos también email a /operators
+        console.debug("[REGISTER] OPERADOR → POST /operators (incluye email)")
+
+        const res = await createOperatorDirect({
+          name: registerData.name || "Operador Seed",
+          dni: dniNumber,
+          password: registerData.password,
+          isAvailable: true,
+          role: "OPERADOR",
+          email,
+        })
+
+        const operatorId = res?.id || res?.user?.id || res?.user?._id
+        if (operatorId) {
+          localStorage.setItem("operatorId", String(operatorId))
+          await setOperatorState(String(operatorId), "AVAILABLE").catch(() => {})
+        }
+
+        await login(dniNumber, registerData.password)
+        toast({ title: "¡Operador creado!", description: "La cuenta de operador fue creada y habilitada." })
+        setShowRegister(false)
+        setRegisterData({ name: "", email: "", dni: "", password: "", role: "CLIENT" })
+        setIsLoading(false)
+        return
+      }
+
+      // 👉 CLIENT: JSON exacto requerido por tu backend de /auth/register
+      const payload = {
+        dni: dniNumber,
+        password: registerData.password,
+        role: "CLIENT",
+        name: registerData.name,
+        email,
+      }
+
+      const r = await fetch(`${getApiBase()}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+      if (!r.ok) throw new Error((await r.text().catch(() => "")) || "No se pudo crear la cuenta")
+
+      await login(dniNumber, registerData.password)
+      toast({ title: "¡Cuenta creada!", description: "Tu cuenta ha sido creada exitosamente." })
+      setShowRegister(false)
+      setRegisterData({ name: "", email: "", dni: "", password: "", role: "CLIENT" })
+    } catch (error: any) {
+      const msg =
+        error?.response?.data?.message ||
+        (typeof error?.message === "string" ? error.message : "No se pudo crear la cuenta")
+      toast({ title: "Error de registro", description: msg, variant: "destructive" })
     } finally {
       setIsLoading(false)
     }
   }
 
- const handleRegister = async (e: React.FormEvent) => {
-  e.preventDefault()
-
-  // 🚨 Validación previa de datos
-  if (!registerData.name || !registerData.dni || !registerData.password) {
-    toast({
-      title: "Campos incompletos",
-      description: "Por favor completa todos los campos obligatorios",
-      variant: "destructive",
-    })
-    return
-  }
- const dniRegex = /^\d{8}$/
-  if (!dniRegex.test(registerData.dni)) {
-    toast({
-      title: "DNI inválido",
-      description: "El DNI debe tener exactamente 8 dígitos",
-      variant: "destructive",
-    })
-    return
+  /* ======================= GOOGLE (placeholder) ======================= */
+  const handleGoogleLogin = async () => {
+    setIsLoading(true)
+    try {
+      toast({ title: "Próximamente", description: "Login con Google estará disponible pronto" })
+    } catch {
+      toast({ title: "Error", description: "No se pudo iniciar sesión con Google", variant: "destructive" })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
-  setIsLoading(true)
-
-  // 👇 Control de cancelación si el componente se desmonta
-  const controller = new AbortController()
-  const { signal } = controller
-
-  try {
-    console.log("📝 [LOGIN-FORM] Iniciando registro...", registerData)
- const dniNumber = Number(registerData.dni)
-    await register(
-      registerData.name,
-      dniNumber,
-      registerData.password,
-      registerData.role,
-       // si tu función `register` soporta abort
-    )
-
-    console.log("✅ [LOGIN-FORM] Registro exitoso")
-    toast({
-      title: "¡Cuenta creada!",
-      description: "Tu cuenta ha sido creada exitosamente. Ahora inicia sesión.",
-    })
-
-    // Cambiar a la vista de login después del registro exitoso
-    setShowRegister(false)
-
-    // Limpiar el formulario
-    setRegisterData({
-      name: "",
-      dni: "",
-      password: "",
-      role: "CLIENT",
-    })
-  } catch (error: any) {
-    console.error("❌ [LOGIN-FORM] Error en registro:", error)
-
-    // Normalización de errores
-    const errorMessage =
-      error?.response?.data?.message ||
-      error?.message ||
-      "No se pudo crear la cuenta"
-
-    toast({
-      title: "Error de registro",
-      description: errorMessage,
-      variant: "destructive",
-    })
-  } finally {
-    setIsLoading(false)
-  }
-
-  // Cleanup en caso de desmontar el componente
-  return () => controller.abort()
-}
-
+  /* ======================= UI ======================= */
   if (showRegister) {
     return (
       <div className="min-h-screen flex">
-        {/* Lado izquierdo - Formulario de Registro */}
+        {/* Lado izquierdo - Registro */}
         <div className="flex-1 flex items-center justify-center p-8 bg-white">
           <div className="w-full max-w-md space-y-6">
             <div className="space-y-2">
@@ -196,20 +216,37 @@ export function LoginForm() {
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor="register-email" className="text-sm font-medium text-gray-700">
+                  Email
+                </Label>
+                <Input
+                  id="register-email"
+                  type="email"
+                  placeholder="tu@email.com"
+                  value={registerData.email}
+                  onChange={(e) => setRegisterData({ ...registerData, email: e.target.value })}
+                  required
+                  disabled={isLoading}
+                  className="h-12 border-gray-300 focus:border-[#00B2FF] focus:ring-[#00B2FF]"
+                />
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="register-dni" className="text-sm font-medium text-gray-700">
-                  Dni
+                  DNI
                 </Label>
                 <Input
                   id="register-dni"
-                  type="number"
-                  placeholder="Ingresa tu dni"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="Ingresa tu DNI"
                   value={registerData.dni}
-                   onChange={(e) => {
-    const value = e.target.value
-    if (/^\d{0,8}$/.test(value)) {
-      setRegisterData({ ...registerData, dni: value })
-    }
-  }}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    if (/^\d{0,8}$/.test(value)) {
+                      setRegisterData({ ...registerData, dni: value })
+                    }
+                  }}
                   required
                   disabled={isLoading}
                   className="h-12 border-gray-300 focus:border-[#00B2FF] focus:ring-[#00B2FF]"
@@ -248,8 +285,8 @@ export function LoginForm() {
                 </select>
               </div>
 
-              <Button 
-                type="submit" 
+              <Button
+                type="submit"
                 className="w-full h-12 bg-[#00B2FF] hover:bg-[#0099E6] text-white font-medium rounded-md"
                 disabled={isLoading}
               >
@@ -290,9 +327,10 @@ export function LoginForm() {
     )
   }
 
+  // ======== LOGIN VIEW ========
   return (
     <div className="min-h-screen flex">
-      {/* Lado izquierdo - Formulario de Login */}
+      {/* Lado izquierdo - Login */}
       <div className="flex-1 flex items-center justify-center p-8 bg-white">
         <div className="w-full max-w-md space-y-6">
           <div className="space-y-2">
@@ -303,19 +341,20 @@ export function LoginForm() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="dni" className="text-sm font-medium text-gray-700">
-                Dni
+                DNI
               </Label>
               <Input
                 id="dni"
                 type="text"
-                placeholder="Ingresa tu dni"
+                inputMode="numeric"
+                placeholder="Ingresa tu DNI"
                 value={loginData.dni}
-                  onChange={(e) => {
-    const value = e.target.value
-    if (/^\d{0,8}$/.test(value)) {   // Solo permite hasta 8 dígitos
-      setLoginData({ ...loginData, dni: value })
-    }
-  }}
+                onChange={(e) => {
+                  const value = e.target.value
+                  if (/^\d{0,8}$/.test(value)) {
+                    setLoginData({ ...loginData, dni: value })
+                  }
+                }}
                 required
                 disabled={isLoading}
                 className="h-12 border-gray-300 focus:border-[#00B2FF] focus:ring-[#00B2FF]"
@@ -350,8 +389,8 @@ export function LoginForm() {
               </Label>
             </div>
 
-            <Button 
-              type="submit" 
+            <Button
+              type="submit"
               className="w-full h-12 bg-[#00B2FF] hover:bg-[#0099E6] text-white font-medium rounded-md"
               disabled={isLoading}
             >
@@ -382,23 +421,11 @@ export function LoginForm() {
             onClick={handleGoogleLogin}
             disabled={isLoading}
           >
-            <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
-              <path
-                fill="currentColor"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="currentColor"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="currentColor"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-              />
-              <path
-                fill="currentColor"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-              />
+            <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+              <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
             </svg>
             Iniciar sesión con Google
           </Button>
