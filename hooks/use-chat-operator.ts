@@ -2,13 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatPreview } from "@/types/chats";
+import { useSocket } from "@/hooks/use-socket";
 
-import {
-  listAllMessages,           // sólo si activás polling N8N
-  sendTextMessage,           // fallback legacy
-  type Mensaje as N8nMsg,
-} from "@/components/helpers/helper.message";
-
+// Helpers REST propios
 import {
   assignWithAutoHeal,
   ensureOperatorContext,
@@ -16,12 +12,21 @@ import {
   getChatMessages,
   ensureBackendChatForPhone,
   postChatMessage,
+  ensureAssignmentForChat,   // 👈 asegura asignación del chat
+  setOperatorState,          // 👈 pone AVAILABLE al operador
 } from "@/components/helpers/helper.assign";
+
+import {
+  listAllMessages,           // sólo si activás polling N8N
+  sendTextMessage,           // fallback legacy
+  type Mensaje as N8nMsg,
+} from "@/components/helpers/helper.message";
 
 /* ================= Config ================= */
 const pollMs = Number(process.env.NEXT_PUBLIC_N8N_POLL_MS || 4000);
 const MAX_ACTIVE = 6;
 const ENABLE_AUTO_ASSIGN = String(process.env.NEXT_PUBLIC_AUTO_ASSIGN ?? "0") === "1";
+const AUTO_ASSIGN_ON_INBOUND = true; // 👈 asigna cuando llega mensaje de CLIENT
 
 // N8N (envs provistas)
 const ENABLE_N8N = String(process.env.NEXT_PUBLIC_N8N_ENABLE ?? "0") === "1";
@@ -70,11 +75,9 @@ function uuid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+const ensurePlus = (p: string) => (p.startsWith("+") ? p : `+${p}`);
 const normalizePhone = (p?: string) =>
   p ? String(p).replace(/\s+/g, "").replace(/^00/, "+") : undefined;
-
-const ensurePlus = (p: string) => (p.startsWith("+") ? p : `+${p}`);
-
 const toMsisdn = (raw?: string) => {
   if (!raw) return undefined;
   const s = raw.replace(/\s+/g, "");
@@ -82,7 +85,6 @@ const toMsisdn = (raw?: string) => {
   return `${DEFAULT_PREFIX}${s}`;
 };
 
-/* ===== Helper para decidir el nombre del cliente ===== */
 function pickClientName(raw: any): string {
   const candidates = [
     raw?.clientName,
@@ -94,8 +96,6 @@ function pickClientName(raw: any): string {
     raw?.client?.name,
     raw?.user?.name,
     raw?.customer?.name,
-    raw?.assignedTo?.name,
-    raw?.assignedUser?.name,
     raw?.metadata?.clientName,
     raw?.meta?.clientName,
     raw?.profile?.name,
@@ -111,7 +111,7 @@ function pickClientName(raw: any): string {
   return `Cliente ${idShort}...`;
 }
 
-/* ========== Persistencia: pendientes ========== */
+/* ===== Persistencia: pendientes ===== */
 const PENDING_KEY = "chat_pending_msgs_v1";
 
 function revivePending(obj: any): Record<string, ChatMessage[]> {
@@ -125,7 +125,6 @@ function revivePending(obj: any): Record<string, ChatMessage[]> {
   }
   return out;
 }
-
 function loadPendingFromStorage(): Record<string, ChatMessage[]> {
   try {
     const raw = localStorage.getItem(PENDING_KEY);
@@ -135,7 +134,6 @@ function loadPendingFromStorage(): Record<string, ChatMessage[]> {
     return {};
   }
 }
-
 function savePendingToStorage(data: Record<string, ChatMessage[]>) {
   try {
     const plain: any = {};
@@ -149,15 +147,13 @@ function savePendingToStorage(data: Record<string, ChatMessage[]>) {
   } catch {}
 }
 
-/* ========== Persistencia: cache de chats/mensajes ========== */
+/* ===== Persistencia: cache ===== */
 const CACHE_KEY = "chat_operator_cache_v1";
-
 type CacheShape = {
   chats: ChatItem[];
   byChat: Record<string, ChatMessage[]>;
   selectedChatId?: string;
 };
-
 function saveCache(data: CacheShape) {
   try {
     const serializable: any = {
@@ -185,7 +181,6 @@ function saveCache(data: CacheShape) {
     localStorage.setItem(CACHE_KEY, JSON.stringify(serializable));
   } catch {}
 }
-
 function loadCache(): CacheShape | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
@@ -210,31 +205,7 @@ function loadCache(): CacheShape | null {
   }
 }
 
-/* ================= N8N: helpers envío ================= */
-async function n8nSendMedia(to: string, text?: string, file?: File) {
-  if (!N8N_READY) throw new Error("N8N disabled or missing base URL");
-  const fd = new FormData();
-  fd.append("to", to);
-  if (text) fd.append("text", text);
-  if (file) fd.append("file", file);
-  const r = await fetch(`${N8N_BASE}${N8N_MEDIA_EP}`, { method: "POST", body: fd });
-  if (!r.ok) throw new Error(`N8N media failed: ${r.status} ${await r.text()}`);
-  return r.json().catch(() => ({}));
-}
-
-async function n8nSendTemplate(to: string, tratamiento: string, nombre_cliente: string, file?: File) {
-  if (!N8N_READY) throw new Error("N8N disabled or missing base URL");
-  const fd = new FormData();
-  fd.append("to", to);
-  fd.append("tratamiento", tratamiento);
-  fd.append("nombre_cliente", nombre_cliente);
-  if (file) fd.append("file", file);
-  const r = await fetch(`${N8N_BASE}${N8N_TPL_EP}`, { method: "POST", body: fd });
-  if (!r.ok) throw new Error(`N8N template failed: ${r.status} ${await r.text()}`);
-  return r.json().catch(() => ({}));
-}
-
-/* ================== Helpers de MERGE ================== */
+/* ===== Merge utils ===== */
 function mergeChats(base: ChatItem[], incoming: ChatItem[]): ChatItem[] {
   const map = new Map(base.map((c) => [c.chatId, c]));
   for (const c of incoming) {
@@ -260,7 +231,6 @@ function mergeChats(base: ChatItem[], incoming: ChatItem[]): ChatItem[] {
     (a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime()
   );
 }
-
 function mergeByChat(
   base: Record<string, ChatMessage[]>,
   incoming: Record<string, ChatMessage[]>
@@ -284,8 +254,6 @@ function mergeByChat(
 }
 
 /* =============== FRONT-ONLY: traer asignados y enriquecer =============== */
-
-// limitador simple de concurrencia
 function createLimiter(max = 4) {
   let running = 0;
   const q: Array<() => void> = [];
@@ -298,13 +266,10 @@ function createLimiter(max = 4) {
   return <T>(fn: () => Promise<T>) =>
     new Promise<T>((res, rej) => {
       const task = () =>
-        fn()
-          .then(res)
-          .catch(rej)
-          .finally(() => {
-            running--;
-            run();
-          });
+        fn().then(res).catch(rej).finally(() => {
+          running--;
+          run();
+        });
       q.push(task);
       run();
     });
@@ -322,7 +287,6 @@ async function hydrateAssignedChatsFrontOnly(
     const status = String(x?.status ?? "ACTIVE") as ChatStatus;
     const userId = String(x?.userId ?? x?.clientId ?? id);
     const updatedAt = x?.updatedAt ?? x?.createdAt ?? Date.now();
-
     const clientName = pickClientName(x);
     const phone = x?.phone ?? x?.client?.phone ?? x?.user?.phone;
 
@@ -377,10 +341,7 @@ async function hydrateAssignedChatsFrontOnly(
   return { chats: base, byChat };
 }
 
-/* ================= buildStateFromN8n con bootstrap en backend ================ */
-
-const P2C_BATCH_LIMIT = 3; // para no saturar el back por tick
-
+/* ================= buildStateFromN8n (opcional) ================= */
 const mapN8nToChatMessage = (m: N8nMsg, chatId: string): ChatMessage => {
   const src: any = (m as any).raw ?? m;
   const rawDir = (m as any).direction?.toUpperCase?.();
@@ -436,8 +397,8 @@ function buildStateFromN8n(
     const peer = dir === "IN" ? normalizePhone(fromStr) : normalizePhone(toStr);
     if (!peer) continue;
 
-    const tempId = peer.replace(/^\+/, "");
-    const cm = mapN8nToChatMessage(raw, tempId);
+    const provisionalChatId = peer.replace(/^\+/, "");
+    const cm = mapN8nToChatMessage(raw, provisionalChatId);
     const displayName = src?.profile_name || (cm.sender === "CLIENT" ? "Cliente" : "Operador");
 
     const prev = groups.get(peer) ?? { phone: peer, msgs: [], name: displayName };
@@ -445,11 +406,9 @@ function buildStateFromN8n(
     groups.set(peer, prev);
   }
 
-  // Proyección inmediata (con posibles IDs “temporales”)
   const nextByChat: Record<string, ChatMessage[]> = {};
   const nextChats: ChatItem[] = [];
 
-  // cache PHONE->chatId real
   let phoneToChat: Record<string, string> = {};
   try { phoneToChat = JSON.parse(localStorage.getItem("phone_to_chat_map_v1") || "{}"); } catch {}
 
@@ -474,19 +433,17 @@ function buildStateFromN8n(
     });
   });
 
-  // Bootstrap asíncrono: crear Chat real y (opcional) persistir IN en back
+  // Bootstrap opcional: crear chat real + subir IN al backend + asegurar asignación
   (async () => {
     let created = 0;
     for (const [phone, data] of groups.entries()) {
       if (phoneToChat[phone]) continue;
-      if (created >= P2C_BATCH_LIMIT) break;
-
+      if (created >= 3) break;
       try {
         const realId = await ensureBackendChatForPhone(phone, data.name, authToken);
+        try { await ensureAssignmentForChat(realId, authToken); } catch {}
         phoneToChat[phone] = realId;
         localStorage.setItem("phone_to_chat_map_v1", JSON.stringify(phoneToChat));
-
-        // subimos mensajes IN para que queden en el historial del back
         const inMsgs = data.msgs.filter(m => m.sender === "CLIENT");
         for (const m of inMsgs) {
           await postChatMessage(realId, {
@@ -497,16 +454,41 @@ function buildStateFromN8n(
             timestamp: m.timestamp.getTime(),
           }, authToken);
         }
-      } catch (e) {
-        console.warn("[ensureBackendChatForPhone] fallo", phone, e);
-      } finally {
-        created++;
-      }
+      } catch (e) {} finally { created++; }
     }
   })();
 
   nextChats.sort((a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime());
   return { nextChats, nextByChat };
+}
+
+/* ==================== WS helpers ==================== */
+// Evento que escucha tu ChatGateway para enviar/broadcast
+const WS_EVENT_SEND = "sendMessage";
+
+// Emit con ACK y timeout
+function emitWithAck(socket: any, event: string, payload: any, timeoutMs = 2000) {
+  return new Promise<any>((resolve, reject) => {
+    let done = false;
+    const t = setTimeout(() => {
+      if (done) return;
+      done = true;
+      reject(new Error(`ACK timeout ${event}`));
+    }, timeoutMs);
+    try {
+      socket.emit(event, payload, (ack: any) => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        resolve(ack);
+      });
+    } catch (e) {
+      if (done) return;
+      done = true;
+      clearTimeout(t);
+      reject(e);
+    }
+  });
 }
 
 /* ================= Hook ================= */
@@ -524,12 +506,31 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
     typeof window !== "undefined" ? loadPendingFromStorage() : {}
   );
 
-  // kill-switch para N8N
+  // N8N kill-switch
   const n8nDisabledRef = useRef<boolean>(!N8N_READY);
 
+  // ===== WebSocket como OPERADOR =====
+  const { socket, isConnected } = useSocket({
+    userRole: "OPERADOR",
+    serverUrl: process.env.NEXT_PUBLIC_WS_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3002",
+  });
+
+  // Notificaciones
   useEffect(() => {
-    if (!N8N_READY && ENABLE_N8N) {
-      console.warn("[useChatOperator] N8N habilitado pero falta NEXT_PUBLIC_N8N_BASE_URL. Poll deshabilitado.");
+    if (typeof window === "undefined") return;
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+
+  const notifyClientMessage = useCallback((chatId: string, preview: string, clientName?: string) => {
+    const title = clientName ? `Nuevo mensaje de ${clientName}` : "Nuevo mensaje de cliente";
+    const body = preview?.slice(0, 120) || "Mensaje nuevo";
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      try { new Notification(title, { body }); } catch { alert(`${title}\n\n${body}`); }
+    } else {
+      alert(`${title}\n\n${body}`);
     }
   }, []);
 
@@ -547,90 +548,74 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
       setLoading(false);
     }
   }, []);
-
-  // Guardar cache
   useEffect(() => {
     saveCache({ chats, byChat, selectedChatId });
   }, [chats, byChat, selectedChatId]);
 
   const pollRef = useRef<NodeJS.Timeout | null>(null);
-
-  const current = useMemo(
-    () => chats.find((c) => c.chatId === selectedChatId),
-    [chats, selectedChatId]
-  );
+  const current = useMemo(() => chats.find((c) => c.chatId === selectedChatId), [chats, selectedChatId]);
   const messages = useMemo<ChatMessage[]>(
     () => (selectedChatId ? byChat[selectedChatId] ?? [] : []),
     [byChat, selectedChatId]
   );
 
-  /* ====== Reconciliar pendientes ====== */
-  const mergeWithPending = useCallback(
-    (fetched: Record<string, ChatMessage[]>) => {
-      const RESOLVE_WINDOW_MS = 60_000;
-      const next: Record<string, ChatMessage[]> = { ...fetched };
-
-      for (const chatId of Object.keys(pendingByChat)) {
-        const pending = pendingByChat[chatId] ?? [];
-        const base = next[chatId] ? [...next[chatId]] : [];
-
-        const resolved: ChatMessage[] = [];
-        for (const p of pending) {
-          const idx = base.findIndex(
-            (b) =>
-              b.sender === p.sender &&
-              (b.content ?? "") === (p.content ?? "") &&
-              Math.abs(b.timestamp.getTime() - p.timestamp.getTime()) <= RESOLVE_WINDOW_MS
-          );
-          if (idx >= 0) resolved.push(p);
-          else base.push(p);
-        }
-
-        base.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-        next[chatId] = base;
-
-        if (resolved.length) {
-          setPendingByChat((prev) => {
-            const clone = { ...prev };
-            clone[chatId] = (clone[chatId] ?? []).filter(
-              (p) =>
-                !resolved.some(
-                  (r) =>
-                    r.sender === p.sender &&
-                    (r.content ?? "") === (p.content ?? "") &&
-                    Math.abs(r.timestamp.getTime() - p.timestamp.getTime()) <= RESOLVE_WINDOW_MS
-                )
-            );
-            return clone;
-          });
-        }
+  // reconciliar pendientes
+  const mergeWithPending = useCallback((fetched: Record<string, ChatMessage[]>) => {
+    const RESOLVE_WINDOW_MS = 60_000;
+    const next: Record<string, ChatMessage[]> = { ...fetched };
+    for (const chatId of Object.keys(pendingByChat)) {
+      const pending = pendingByChat[chatId] ?? [];
+      const base = next[chatId] ? [...next[chatId]] : [];
+      const resolved: ChatMessage[] = [];
+      for (const p of pending) {
+        const idx = base.findIndex(
+          (b) =>
+            b.sender === p.sender &&
+            (b.content ?? "") === (p.content ?? "") &&
+            Math.abs(b.timestamp.getTime() - p.timestamp.getTime()) <= RESOLVE_WINDOW_MS
+        );
+        if (idx >= 0) resolved.push(p);
+        else base.push(p);
       }
+      base.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      next[chatId] = base;
+      if (resolved.length) {
+        setPendingByChat((prev) => {
+          const clone = { ...prev };
+          clone[chatId] = (clone[chatId] ?? []).filter(
+            (p) =>
+              !resolved.some(
+                (r) =>
+                  r.sender === p.sender &&
+                  (r.content ?? "") === (p.content ?? "") &&
+                  Math.abs(r.timestamp.getTime() - p.timestamp.getTime()) <= RESOLVE_WINDOW_MS
+              )
+          );
+          return clone;
+        });
+      }
+    }
+    return next;
+  }, [pendingByChat]);
 
-      return next;
-    },
-    [pendingByChat]
-  );
-
-  /* ====== Auto-asignación (opt-in) ====== */
+  // Auto-asignación (opcional)
   const autoAssigningRef = useRef(false);
   const { token: ensuredToken, operatorId: ensuredOperatorId } = ensureOperatorContext();
   const authToken = token || ensuredToken;
-
-  function toIdString(v: any): string {
+  const operatorId = useMemo(() => {
+    const v = ensuredOperatorId;
     if (!v) return "";
-    if (typeof v === "string") return v;
-    if (typeof v === "number") return String(v);
-    if (typeof v === "object") {
-      const cand = v.id ?? v._id ?? v.operatorId ?? v.userId ?? (typeof v.toString === "function" ? v.toString() : "");
-      if (typeof cand === "string") return cand;
-      if (typeof cand === "number") return String(cand);
-    }
-    return String(v);
-  }
+    if (typeof v === "string") return v.trim();
+    return String((v as any).id ?? (v as any)._id ?? v).trim();
+  }, [ensuredOperatorId]);
 
-  const operatorId = toIdString(ensuredOperatorId).trim();
+  // 👇 NUEVO: poner OPERADOR en AVAILABLE al cargar (para quedar elegible)
+  useEffect(() => {
+    if (!operatorId) return;
+    setOperatorState(operatorId, "AVAILABLE", authToken).catch(() => {});
+  }, [operatorId, authToken]);
 
-  /* ====== Carga inicial + Poll N8N ====== */
+  // Carga inicial + Poll N8N
   useEffect(() => {
     let mounted = true;
 
@@ -697,9 +682,7 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
         try {
           const raw = await listAllMessages();
           if (!raw || raw.length === 0) return;
-
           const { nextChats: n8nChats, nextByChat: n8nByChat } = buildStateFromN8n(raw, authToken);
-
           setChats((prev) => mergeChats(prev, n8nChats));
           setByChat((prev) => {
             const merged = mergeByChat(prev, n8nByChat);
@@ -724,114 +707,219 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mergeWithPending, operatorId]);
 
-  /* ====== Poll liviano para detectar NUEVOS chats (sin recargar) ====== */
+  /* ===== helper local: hidratar un chat específico ===== */
+  const hydrateSingleChat = useCallback(async (chatId: string) => {
+    try {
+      const hist = await getChatMessages(chatId, authToken);
+      const msgs: ChatMessage[] = (hist || [])
+        .map((m: any) => ({
+          id: String(m?.id ?? m?._id ?? `${chatId}-${m?.timestamp ?? Date.now()}`),
+          chatId,
+          sender: (String(m?.sender ?? m?.senderType ?? m?.from ?? "CLIENT").toUpperCase() as ChatMessage["sender"]),
+          content: m?.content ?? m?.text ?? m?.body,
+          type: (String(m?.type ?? "TEXT").toUpperCase() as ChatMessage["type"]),
+          imageUrl: m?.imageUrl,
+          timestamp: new Date(m?.timestamp ?? m?.createdAt ?? Date.now()),
+          senderName: m?.senderName ?? undefined,
+        }))
+        .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      setByChat(prev => ({ ...prev, [chatId]: msgs }));
+
+      const last = msgs[msgs.length - 1];
+      setChats(prev => {
+        const exists = prev.find(c => c.chatId === chatId);
+        const clientName =
+          msgs.find(m => m.sender === "CLIENT")?.senderName ||
+          exists?.clientName || "Cliente";
+
+        const base: ChatItem = exists ?? {
+          chatId,
+          clientId: chatId,
+          clientName,
+          phone: undefined,
+          status: "ACTIVE",
+          isOnline: true,
+          lastMessageTime: new Date(),
+          lastMessagePreview: "",
+          avatar: `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(clientName)}`,
+        };
+
+        const updated: ChatItem = {
+          ...base,
+          lastMessageTime: last?.timestamp ?? base.lastMessageTime,
+          lastMessagePreview: last ? (last.type === "IMAGE" ? "📷 Imagen" : (last.content ?? "")) : base.lastMessagePreview,
+        };
+
+        const next = exists
+          ? prev.map(c => c.chatId === chatId ? updated : c)
+          : [updated, ...prev];
+
+        return next.sort((a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime());
+      });
+    } catch {}
+  }, [authToken]);
+
+  /* ====== WebSocket listeners ====== */
+  // unir al room del chat cuando el operador selecciona uno
   useEffect(() => {
-    if (!operatorId) return;
-    let stopped = false;
+    if (!socket || !isConnected || !selectedChatId) return;
+    socket.emit("joinChat", { chatId: selectedChatId });
+  }, [socket, isConnected, selectedChatId]);
 
-    const seenIds = new Set<string>();
-    chats.forEach((c) => seenIds.add(c.chatId));
+  useEffect(() => {
+    if (!socket) return;
 
-    const int = setInterval(async () => {
-      if (stopped) return;
-      try {
-        const res = await getActiveChats(operatorId, authToken);
-        if (!res?.ok) return;
-
-        const items = res.items || [];
-        const incomingIds = items.map((x: any) => String(x?.chatId ?? x?.id ?? x?._id));
-        const newIds = incomingIds.filter((id) => !seenIds.has(id));
-        if (newIds.length === 0) return;
-
-        const newChatItems: ChatItem[] = [];
-        const newByChat: Record<string, ChatMessage[]> = {};
-        const limit = createLimiter(4);
-
-        await Promise.all(
-          newIds.map((id) =>
-            limit(async () => {
-              const raw = items.find(
-                (x: any) => String(x?.chatId ?? x?.id ?? x?._id) === id
-              ) || {};
-
-              const clientName = pickClientName(raw);
-              const phone = raw?.phone ?? raw?.client?.phone ?? raw?.user?.phone;
-
-              const item: ChatItem = {
-                chatId: id,
-                clientId: String(raw?.userId ?? raw?.clientId ?? id),
-                clientName,
-                phone,
-                status: String(raw?.status ?? "ACTIVE") as ChatStatus,
-                isOnline: true,
-                lastMessageTime: new Date(raw?.updatedAt ?? raw?.createdAt ?? Date.now()),
-                lastMessagePreview: "",
-                avatar: `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(clientName)}`,
-              };
-
-              try {
-                const hist = await getChatMessages(id, authToken);
-                const msgs: ChatMessage[] = (hist || [])
-                  .map((m: any) => ({
-                    id: String(m?.id ?? m?._id ?? `${id}-${m?.timestamp ?? Date.now()}`),
-                    chatId: id,
-                    sender: (String(m?.sender ?? m?.senderType ?? "CLIENT").toUpperCase() as ChatMessage["sender"]),
-                    content: m?.content ?? m?.text ?? m?.body,
-                    type: (String(m?.type ?? "TEXT").toUpperCase() as ChatMessage["type"]),
-                    imageUrl: m?.imageUrl,
-                    timestamp: new Date(m?.timestamp ?? m?.createdAt ?? Date.now()),
-                  }))
-                  .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
-                newByChat[id] = msgs;
-                const last = msgs[msgs.length - 1];
-                if (last) {
-                  item.lastMessageTime = last.timestamp;
-                  item.lastMessagePreview = last.type === "IMAGE" ? "📷 Imagen" : last.content ?? "";
-                }
-              } catch {
-                newByChat[id] = [];
-              }
-
-              newChatItems.push(item);
-            })
-          )
-        );
-
-        setByChat((prev) => {
-          const merged = { ...prev };
-          for (const [cid, arr] of Object.entries(newByChat)) merged[cid] = arr;
-          return merged;
-        });
-
-        setChats((prev) => {
-          const map = new Map(prev.map((c) => [c.chatId, c]));
-          for (const c of newChatItems) {
-            map.set(c.chatId, c);
-            seenIds.add(c.chatId);
+    const upsertMessages = (chatId: string, incoming: ChatMessage[]) => {
+      setByChat((prev) => {
+        const curr = prev[chatId] ?? [];
+        const seen = new Set(curr.map((m) => `${m.id}|${m.timestamp.getTime()}`));
+        const merged = [...curr];
+        for (const m of incoming) {
+          const key = `${m.id}|${m.timestamp.getTime()}`;
+          if (!seen.has(key)) {
+            merged.push(m);
+            seen.add(key);
           }
-          const out = Array.from(map.values()).sort(
-            (a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime()
-          );
-          return out;
-        });
-      } catch {
-        // silencio
+        }
+        merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+        return { ...prev, [chatId]: merged };
+      });
+
+      const last = incoming[incoming.length - 1];
+      if (last) {
+        setChats((prev) =>
+          prev
+            .map((c) =>
+              c.chatId === chatId
+                ? {
+                    ...c,
+                    lastMessageTime: last.timestamp,
+                    lastMessagePreview: last.type === "IMAGE" ? "📷 Imagen" : (last.content ?? ""),
+                  }
+                : c
+            )
+            .sort((a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime())
+        );
       }
-    }, 4000);
+    };
+
+    const onChatAutoAssigned = (payload: any) => {
+      const chatId = String(payload?.chatId);
+      const clientId = String(payload?.clientId ?? "");
+      const history = Array.isArray(payload?.history) ? payload.history : [];
+
+      setChats((prev) => {
+        const exists = prev.some((c) => c.chatId === chatId);
+        if (exists) return prev;
+        const clientName =
+          history.find((h: any) => (h?.sender ?? h?.senderType) === "CLIENT")?.senderName ||
+          "Cliente";
+        const item: ChatItem = {
+          chatId,
+          clientId,
+          clientName,
+          phone: undefined,
+          status: "ACTIVE",
+          isOnline: true,
+          lastMessageTime: new Date(payload?.timestamp ?? Date.now()),
+          lastMessagePreview: "",
+          avatar: `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(clientName)}`,
+        };
+        return [item, ...prev];
+      });
+
+      const mapped: ChatMessage[] = history
+        .map((msg: any) => ({
+          id: String(msg?.id ?? msg?._id ?? `${chatId}-${msg?.timestamp ?? Date.now()}`),
+          chatId,
+          sender: (String(msg?.sender ?? msg?.senderType ?? "CLIENT").toUpperCase() as ChatMessage["sender"]),
+          content: msg?.content ?? "",
+          type: (String(msg?.type ?? "TEXT").toUpperCase() as ChatMessage["type"]),
+          imageUrl: msg?.imageUrl,
+          timestamp: new Date(msg?.timestamp ?? Date.now()),
+          senderName: msg?.senderName,
+        }))
+        .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      if (mapped.length) upsertMessages(chatId, mapped);
+      setSelectedChatId((prev) => prev ?? chatId);
+    };
+
+    const onNewMessage = (msg: any) => {
+      const chatId = String(msg?.chatId);
+      const senderType = String(msg?.senderType ?? msg?.sender ?? "SYSTEM").toUpperCase() as ChatMessage["sender"];
+      const mapped: ChatMessage = {
+        id: String(msg?.id ?? msg?._id ?? `${chatId}-${msg?.timestamp ?? Date.now()}`),
+        chatId,
+        sender: senderType,
+        content: msg?.content ?? "",
+        type: (String(msg?.type ?? "TEXT").toUpperCase() as ChatMessage["type"]),
+        imageUrl: msg?.imageUrl,
+        timestamp: new Date(msg?.timestamp ?? Date.now()),
+        senderName: msg?.senderName,
+      };
+
+      // 👇 Si entra un mensaje de cliente y el chat no está en lista, asigno y lo hidrato
+      if (senderType === "CLIENT" && AUTO_ASSIGN_ON_INBOUND) {
+        const exists = chats.some(c => c.chatId === chatId);
+        if (!exists) {
+          ensureAssignmentForChat(chatId, authToken)
+            .then(() => hydrateSingleChat(chatId))
+            .catch(() => {});
+        }
+      }
+
+      upsertMessages(chatId, [mapped]);
+
+      // 🔔 Notificar si es CLIENTE
+      if (senderType === "CLIENT") {
+        const clientName =
+          chats.find((c) => c.chatId === chatId)?.clientName ||
+          msg?.clientName ||
+          "Cliente";
+        const preview = mapped.type === "IMAGE" ? "📷 Imagen" : (mapped.content ?? "");
+        notifyClientMessage(chatId, preview, clientName);
+      }
+    };
+
+    const onChatFinished = (d: any) => {
+      const chatId = String(d?.chatId);
+      setChats((prev) =>
+        prev.map((c) => (c.chatId === chatId ? { ...c, status: "FINISHED" } : c))
+      );
+      const sysMsg: ChatMessage = {
+        id: uuid(),
+        chatId,
+        sender: "SYSTEM",
+        content: "✅ El operador ha finalizado este chat.",
+        type: "TEXT",
+        timestamp: new Date(),
+        senderName: "Sistema",
+      };
+      upsertMessages(chatId, [sysMsg]);
+    };
+
+    socket.on("chatAutoAssigned", onChatAutoAssigned);
+    socket.on("newMessage", onNewMessage);
+    socket.on("chatFinished", onChatFinished);
 
     return () => {
-      stopped = true;
-      clearInterval(int);
+      socket.off("chatAutoAssigned", onChatAutoAssigned);
+      socket.off("newMessage", onNewMessage);
+      socket.off("chatFinished", onChatFinished);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operatorId, authToken, chats.length]);
+  }, [socket, chats, notifyClientMessage, authToken, hydrateSingleChat]);
 
   /* ====== Envío ====== */
   const pushMessage = useCallback((chatId: string, msg: ChatMessage) => {
     setByChat((prev) => {
+      const curr = prev[chatId] ?? [];
+      const key = `${msg.id}|${msg.timestamp.getTime()}`;
+      const seen = new Set(curr.map((m) => `${m.id}|${m.timestamp.getTime()}`));
+      if (seen.has(key)) return prev;
       const next = { ...prev };
-      next[chatId] = [...(next[chatId] ?? []), msg];
+      next[chatId] = [...curr, msg].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
       return next;
     });
     setChats((prev) =>
@@ -867,10 +955,7 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
     };
 
     try {
-      const target = toMsisdn(current?.phone || selectedChatId);
-      if (!target) throw new Error("Destino inválido");
-
-      // UI optimista
+      // 1) Optimista en UI
       pushMessage(selectedChatId, outgoing);
       setPendingByChat((prev) => {
         const next = { ...prev };
@@ -878,32 +963,44 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
         return next;
       });
 
-      // Envío saliente (N8N o legacy)
-      if (N8N_READY) {
-        await n8nSendMedia(target, text);
+      // 2) WebSocket primero (persistencia + broadcast en el back)
+      if (socket) {
+        const wsPayload = {
+          chatId: selectedChatId,
+          userId: operatorId,
+          senderType: "OPERADOR",
+          clientName: "Operador",
+          type: "TEXT",
+          content: text,
+          timestamp: Date.now(),
+          clientMessageId: outgoing.id,
+        };
+        await emitWithAck(socket, WS_EVENT_SEND, wsPayload, 2000);
       } else {
-        await sendTextMessage(ensurePlus(target), text);
+        throw new Error("Socket no disponible");
       }
-
-      // Persistir también en backend
-      await postChatMessage(selectedChatId, {
-        sender: "OPERADOR",
-        type: "TEXT",
-        content: text,
-        timestamp: Date.now(),
-      }, authToken);
     } catch (e) {
-      console.error("[useChatOperator] Error enviando:", e);
-      setPendingByChat((prev) => {
-        const next = { ...prev };
-        next[selectedChatId] = (next[selectedChatId] ?? []).filter((m) => m.id !== outgoing.id);
-        return next;
-      });
+      console.error("[useChatOperator] Error WS enviando:", e);
+      // 3) Fallback REST por si falla el WS
+      try {
+        await postChatMessage(
+          selectedChatId,
+          { sender: "OPERADOR", type: "TEXT", content: text, timestamp: Date.now() },
+          authToken
+        );
+      } catch (e2) {
+        // si también falla REST, retiro el pendiente optimista
+        setPendingByChat((prev) => {
+          const next = { ...prev };
+          next[selectedChatId] = (next[selectedChatId] ?? []).filter((m) => m.id !== outgoing.id);
+          return next;
+        });
+      }
     } finally {
       setMessage("");
       setLocalSending(false);
     }
-  }, [current?.phone, message, selectedChatId, pushMessage, authToken]);
+  }, [selectedChatId, message, operatorId, socket, pushMessage, authToken]);
 
   const handlePickImage = useCallback(() => fileRef.current?.click(), []);
 
@@ -929,7 +1026,6 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
         const target = toMsisdn(current?.phone || selectedChatId);
         if (!target) throw new Error("Destino inválido");
 
-        // UI optimista
         pushMessage(selectedChatId, imgMsg);
 
         if (N8N_READY) {
@@ -939,14 +1035,17 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
           console.warn("N8N deshabilitado: imagen sólo se mostró en UI.");
         }
 
-        // Persistir en backend
-        await postChatMessage(selectedChatId, {
-          sender: "OPERADOR",
-          type: "IMAGE",
-          imageUrl: localUrl, // si tu back te devuelve URL final, reemplázala
-          content: (message || "").trim() || undefined,
-          timestamp: Date.now(),
-        }, authToken);
+        await postChatMessage(
+          selectedChatId,
+          {
+            sender: "OPERADOR",
+            type: "IMAGE",
+            imageUrl: localUrl,
+            content: (message || "").trim() || undefined,
+            timestamp: Date.now(),
+          },
+          authToken
+        );
       } catch (err) {
         console.error("[useChatOperator] Error enviando imagen:", err);
       } finally {
@@ -1019,6 +1118,7 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
       localSending,
       fileRef,
       current,
+      isConnected,
     },
     actions: {
       setSelectedChatId,
@@ -1030,4 +1130,27 @@ export function useChatOperator({ token, mock }: UseChatOperatorOptions) {
       sendTemplate,
     },
   };
+}
+
+/* ===== N8N send helpers (front) ===== */
+async function n8nSendMedia(to: string, text?: string, file?: File) {
+  if (!N8N_READY) throw new Error("N8N disabled or missing base URL");
+  const fd = new FormData();
+  fd.append("to", to);
+  if (text) fd.append("text", text);
+  if (file) fd.append("file", file);
+  const r = await fetch(`${N8N_BASE}${N8N_MEDIA_EP}`, { method: "POST", body: fd });
+  if (!r.ok) throw new Error(`N8N media failed: ${r.status} ${await r.text()}`);
+  return r.json().catch(() => ({}));
+}
+async function n8nSendTemplate(to: string, tratamiento: string, nombre_cliente: string, file?: File) {
+  if (!N8N_READY) throw new Error("N8N disabled or missing base URL");
+  const fd = new FormData();
+  fd.append("to", to);
+  fd.append("tratamiento", tratamiento);
+  fd.append("nombre_cliente", nombre_cliente);
+  if (file) fd.append("file", file);
+  const r = await fetch(`${N8N_BASE}${N8N_TPL_EP}`, { method: "POST", body: fd });
+  if (!r.ok) throw new Error(`N8N template failed: ${r.status} ${await r.text()}`);
+  return r.json().catch(() => ({}));
 }

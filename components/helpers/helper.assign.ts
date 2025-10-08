@@ -4,6 +4,7 @@
  * - Si back devuelve clientName null, intenta PATCH
  * - postChatMessage hace fallback si /chat/:id/messages no existe
  * - Exporta ensureOperatorContext + assignWithAutoHeal
+ * - FIX: exporta createOperatorDirect (para login-form.tsx)
  * ============================================================ */
 
 type Json = Record<string, any>;
@@ -104,6 +105,14 @@ export async function ensureOperatorForUser(input?: { id?: string; dni?: number;
   const cand = input?.id || readOperatorIdFromStorage();
   if (cand) { saveOperatorLocal(String(cand)); return { ok: true, operatorId: String(cand) }; }
   return { ok: false, message: "No operator id available to persist locally" };
+}
+
+/* 👉 FIX: export que pedía tu build */
+export async function createOperatorDirect(payload: { dni: number; email: string; name: string; password?: string }) {
+  // Si tenés endpoint real, reemplazá por POST a tu API y guardá el id real.
+  const fakeId = String(payload.dni || Date.now());
+  saveOperatorLocal(fakeId, { name: payload.name, email: payload.email });
+  return { id: fakeId, ...payload };
 }
 
 /* ----------------------- HTTP utils ----------------------- */
@@ -513,7 +522,7 @@ export async function postChatMessage(
     createdAt: payload.timestamp ?? Date.now(),
   };
 
-  // 1) Ruta estándar (si la agregan a futuro)
+  // 1) Ruta estándar
   try {
     const url1 = `${API_BASE}${CHAT_PATH}/${encodeURIComponent(chatId)}/messages`;
     tried.push(url1);
@@ -533,7 +542,7 @@ export async function postChatMessage(
     console.warn("[postChatMessage] error ruta 1", e);
   }
 
-  // 2) Fallback: POST /chat/messages (si existe)
+  // 2) Fallback: POST /chat/messages
   try {
     const url2 = `${API_BASE}${CHAT_PATH}/messages`;
     tried.push(url2);
@@ -553,7 +562,7 @@ export async function postChatMessage(
     console.warn("[postChatMessage] error ruta 2", e);
   }
 
-  // 3) No existe endpoint de creación de mensajes en tu back: no rompo el flujo
+  // 3) No existe endpoint → no romper
   console.info("[postChatMessage] ninguna ruta disponible, no se persiste en back. tried:", tried);
   return { ok: false, tried };
 }
@@ -580,4 +589,33 @@ export function mapChatWithLastToOperatorDTO(x: any): OperatorChatDTO {
     phone: x?.phone,
     channel: x?.channel,
   };
+}
+
+/* ---------- Asignar un chat específico (si tu back lo soporta) ---------- */
+export async function ensureAssignmentForChat(
+  chatId: string,
+  token?: string
+): Promise<AssignResult> {
+  const auth = token || readTokenFromStorage();
+  const safeId = encodeURIComponent(chatId);
+
+  // Preferido: endpoint específico del chat (si existe)
+  try {
+    const url = `${API_BASE}${CHAT_PATH}/${safeId}/assign`;
+    const r = await fetch(url, { method: "POST", headers: headers(auth) });
+    const p = await safeParseJSON(r);
+    if (r.ok && p.ok) return { ok: true, data: p.json, status: r.status };
+    if (r.status !== 404) {
+      return {
+        ok: false,
+        reason: "HTTP_ERROR",
+        status: r.status,
+        message: p.json?.message || p.raw,
+        raw: p.raw,
+      };
+    }
+  } catch {}
+
+  // Fallback: asignación genérica
+  return assignOperator(auth);
 }

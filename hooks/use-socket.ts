@@ -5,67 +5,53 @@ import { io, type Socket } from "socket.io-client";
 import { useAuth } from "@/components/providers/auth-provider";
 
 interface UseSocketProps {
-  serverUrl?: string;
-  /** Si es true exige token para conectar (operador). Para cliente anónimo usa false. */
-  requireToken?: boolean;
+  userRole?: "CLIENT" | "OPERADOR" | "ADMIN";
+  serverUrl?: string; // base (sin /chat)
 }
 
 export const useSocket = ({
-  serverUrl = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:3002",
-  requireToken = true,
+  userRole = "CLIENT",
+  serverUrl = process.env.NEXT_PUBLIC_WS_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3002",
 }: UseSocketProps) => {
+  const { token } = useAuth();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-
-  const { token } = useAuth();
-  const initializedRef = useRef(false);
+  const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    // 👉 si requiere token y no hay token, no conectes
-    if (requireToken && !token) return;
-    if (initializedRef.current) return;
-    initializedRef.current = true;
+    if (!token) return;
 
-    const url = serverUrl.replace(/\/$/, "");
-    const s = io(url, {
+    const s = io(`${serverUrl}/chat`, {
+      auth: { token, userRole },
       transports: ["websocket", "polling"],
-      withCredentials: true,
-      timeout: 20000,
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
-      // La guía usa token en query. Si no hay token (cliente anónimo), va vacío.
-      query: token ? { token } : {},
-      auth: {}, // el back no lo usa según la guía
+      timeout: 20000,
+      withCredentials: true,
+      forceNew: true,
     });
 
+    s.on("connect", () => setIsConnected(true));
+    s.on("disconnect", () => setIsConnected(false));
+    s.on("connect_error", (err) => {
+      console.error("[SOCKET connect_error]", err?.message || err);
+      setIsConnected(false);
+    });
+
+    socketRef.current = s;
     setSocket(s);
-
-    s.on("connect", () => {
-      setIsConnected(true);
-      s.emit("getStats"); // opcional, no afecta al cliente
-    });
-
-    s.on("disconnect", (reason) => {
-      setIsConnected(false);
-      console.warn("❌ [SOCKET] disconnect:", reason);
-    });
-
-    s.on("connect_error", (err: any) => {
-      setIsConnected(false);
-      console.error("🔥 [SOCKET] connect_error:", { message: err?.message, data: err?.data });
-    });
 
     return () => {
       try {
         s.removeAllListeners();
         s.disconnect();
       } catch {}
+      socketRef.current = null;
       setSocket(null);
       setIsConnected(false);
-      initializedRef.current = false;
     };
-  }, [serverUrl, token, requireToken]);
+  }, [serverUrl, token, userRole]);
 
   return { socket, isConnected };
 };
