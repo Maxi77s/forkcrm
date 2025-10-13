@@ -13,7 +13,7 @@ export const useSocket = ({
   userRole = "CLIENT",
   serverUrl = process.env.NEXT_PUBLIC_WS_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3002",
 }: UseSocketProps) => {
-  const { token } = useAuth();
+  const { token, user } = useAuth(); /* ✅ traemos user */
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
@@ -21,8 +21,19 @@ export const useSocket = ({
   useEffect(() => {
     if (!token) return;
 
+    /* ✅ identidad legible para el gateway (muchos backends derivan clientName de acá) */
+    const userName =
+      user?.name?.trim() ||
+      user?.email?.split("@")[0] ||
+      (userRole === "OPERADOR" ? "Operador" : "Cliente");
+
     const s = io(`${serverUrl}/chat`, {
-      auth: { token, userRole },
+      auth: {
+        token,
+        userRole,
+        userId: user?.id,          // ✅
+        userName,                  // ✅
+      },
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -51,7 +62,7 @@ export const useSocket = ({
       setSocket(null);
       setIsConnected(false);
     };
-  }, [serverUrl, token, userRole]);
+  }, [serverUrl, token, userRole, user?.id, user?.name, user?.email]);
 
   return { socket, isConnected };
 };
