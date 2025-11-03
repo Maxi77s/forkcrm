@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+
 function joinUrl(base: string, path: string) {
   const b = base.replace(/\/+$/, "");
   const p = path.startsWith("/") ? path : `/${path}`;
@@ -9,58 +11,59 @@ function joinUrl(base: string, path: string) {
 export async function POST(req: Request) {
   const base = process.env.N8N_BASE_URL;
   const path = process.env.N8N_SEND_PATH || "/webhook/send_message2";
-
-  if (!base) {
-    return NextResponse.json({ error: "Missing N8N_BASE_URL" }, { status: 500 });
-  }
+  if (!base) return NextResponse.json({ error: "Missing N8N_BASE_URL" }, { status: 500 });
 
   const url = joinUrl(base, path);
 
   try {
     const ct = req.headers.get("content-type") || "";
+    const headers: HeadersInit = {};
+    const H = process.env.N8N_AUTH_HEADER?.trim();
+    const V = process.env.N8N_AUTH_VALUE?.trim();
+    if (H && V) headers[H] = V;
+
     let fd: FormData;
 
     if (ct.includes("multipart/form-data")) {
-      // Reenviamos el form-data que viene del front (to, text, file)
+      // 1) si viene multipart desde el front, reenviamos tal cual
       fd = await req.formData();
-      // Asegurar que existan las keys (al menos vacías)
+
+      // alias compatibilidad: si te llega "data" en vez de "file"
+      if (!fd.has("file") && fd.has("data")) {
+        const anyFile = fd.get("data") as File | null;
+        if (anyFile) {
+          fd.set("file", anyFile, anyFile.name || "upload");
+        }
+        fd.delete("data");
+      }
+
       if (!fd.has("to")) fd.set("to", "");
       if (!fd.has("text")) fd.set("text", "");
     } else {
-      // Si vino JSON, lo convertimos a form-data (el webhook espera multipart)
+      // 2) si vino JSON, sólo podemos enviar texto (sin archivo)
       const body = await req.json().catch(() => ({}));
       fd = new FormData();
       fd.append("to", body?.to ?? "");
       fd.append("text", body?.text ?? "");
-      // Si quisieras soportar base64->archivo, podés parsearlo acá y hacer fd.append("file", blob, "media.jpg")
+      // nota: archivos requieren multipart en el request original
     }
 
-    // Validación mínima
+    // validaciones mínimas
     const to = String(fd.get("to") || "").trim();
     const text = String(fd.get("text") || "").trim();
-    if (!to && !fd.get("file")) {
-      return NextResponse.json(
-        { error: "`to` es requerido (y `text` si no hay archivo)" },
-        { status: 400 }
-      );
+    const hasFile = !!fd.get("file");
+
+    if (!to) {
+      return NextResponse.json({ error: "`to` es requerido" }, { status: 400 });
     }
-    if (!text && !fd.get("file")) {
-      return NextResponse.json(
-        { error: "`text` es requerido si no adjuntás un `file`" },
-        { status: 400 }
-      );
+    if (!hasFile && !text) {
+      return NextResponse.json({ error: "`text` es requerido si no adjuntás `file`" }, { status: 400 });
     }
 
-    // POST directo al webhook N8n (NO seteamos Content-Type manualmente)
-    const upstream = await fetch(url, { method: "POST", body: fd });
-
+    const upstream = await fetch(url, { method: "POST", body: fd, headers });
     const txt = await upstream.text();
     let data: any = txt;
-    try {
-      data = txt ? JSON.parse(txt) : undefined;
-    } catch {
-      // respuesta no-JSON: devolvemos texto
-    }
+    try { data = txt ? JSON.parse(txt) : undefined; } catch {}
 
     if (!upstream.ok) {
       return NextResponse.json(
@@ -69,11 +72,8 @@ export async function POST(req: Request) {
       );
     }
 
-    return NextResponse.json(data ?? { ok: true });
+    return NextResponse.json(data ?? { message: "Workflow was started" });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Send error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message || "Send error" }, { status: 500 });
   }
 }

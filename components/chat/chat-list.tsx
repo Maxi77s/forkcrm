@@ -1,22 +1,52 @@
-// ChatList.tsx (versión con persistencia forzosa de nombres)
+// src/components/chat/chat-list.tsx
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  useLayoutEffect,
+} from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Search, MessageSquare, User, Bot, Phone, ChevronDown, ChevronUp, MessageSquareText } from "lucide-react";
+import {
+  Search,
+  MessageSquare,
+  User,
+  Bot as BotIcon,
+  Phone,
+  ChevronDown,
+  ChevronUp,
+  MessageSquareText,
+  Megaphone,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ChatPreview } from "@/types/chats";
-import { fetchUserNamesByIds } from "@/components/helpers/helper.assign";
-import { patchChatClientName } from "@/components/helpers/helper.assign"; // <- lo usamos en el listener
+import { forcePersistClientName } from "@/components/helpers/helper.assign";
+import { getChatDisplayName, setCachedDisplayName } from "@/lib/display-name";
+
+/* ================== Config / Constantes ================== */
 
 const ALLOWED_STATUSES = new Set([
-  "ACTIVE", "WAITING", "IN_QUEUE", "ESCALATED", "ASSIGNED", "OPEN", "NEW", "PENDING", "HANDOFF", "HUMAN", "HUMAN_SUPPORT"
+  "ACTIVE",
+  "WAITING",
+  "IN_QUEUE",
+  "ESCALATED",
+  "ASSIGNED",
+  "OPEN",
+  "NEW",
+  "PENDING",
+  "HANDOFF",
+  "HUMAN",
+  "HUMAN_SUPPORT",
 ]);
+
 const HIDE_STALE_MINUTES = 12 * 60;
 
 const onlyDigits = (s: string) => String(s || "").replace(/[^\d]/g, "");
@@ -26,157 +56,164 @@ const safeLower = (v: any) => safeStr(v).toLowerCase();
 function minutesBetween(a: Date, b: Date) {
   return Math.abs(a.getTime() - b.getTime()) / (1000 * 60);
 }
+
 function canonicalChatIdFrom(c: any): string | undefined {
   const direct =
-    c?.chatId || c?.id || c?._id || c?.roomId || c?.conversationId || c?.conversation_id ||
-    c?.sessionId || c?.session_id || c?.ticketId || c?.ticket_id || c?.threadId || c?.thread_id ||
-    c?.waChatId || c?.wa_chat_id || c?.key;
+    c?.chatId ||
+    c?.id ||
+    c?._id ||
+    c?.roomId ||
+    c?.conversationId ||
+    c?.conversation_id ||
+    c?.sessionId ||
+    c?.session_id ||
+    c?.ticketId ||
+    c?.ticket_id ||
+    c?.threadId ||
+    c?.thread_id ||
+    c?.waChatId ||
+    c?.wa_chat_id ||
+    c?.key;
   if (direct) return String(direct);
+
   const meta =
     c?.metadata?.canonicalChatId ||
     c?.meta?.canonicalChatId ||
     c?.canonicalChatId ||
     c?.metadata?.canonical_id ||
     c?.meta?.canonical_id;
+
   return meta ? String(meta) : undefined;
 }
-function toTitleCase(name?: string) {
-  const n = (name || "").trim();
-  if (!n) return n;
-  return n.split(/\s+/).map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(" ");
-}
-function isGenericClientLabel(name?: string) {
-  const n = (name || "").trim().toLowerCase();
-  if (!n) return true;
-  // ⚠️ seguimos considerando genéricos, pero el "name authority" los sobreescribe
-  if (["cliente","cliente genérico","unknown","desconocido","anónimo","anonimo"].includes(n)) return true;
-  if (/^cliente[\s\-_]?[0-9a-f\-]{4,}$/i.test(n)) return true;
-  if (/^cliente[:\s]+[0-9a-f\-\+]{4,}$/i.test(n)) return true;
-  return false;
-}
-function isLikelyPhoneLabel(s?: string) {
-  const n = (s || "").trim();
-  return !!n && /^[\+\d][\d\s\-\(\)]{5,}$/.test(n);
-}
-function isGoodName(name?: string) {
-  if (!name) return false;
-  const n = name.trim();
-  if (!n) return false;
-  if (isLikelyPhoneLabel(n)) return false;
-  // ya no filtramos "usuario" de forma dura; lo dejamos pasar si viene de authority o del back
-  return true;
-}
-const pickFirstNonEmpty = (...cands: Array<any>): string | undefined => {
-  for (const c of cands) {
-    const s = safeStr(c).trim();
-    if (s) return s;
+
+/* --- parseo robusto para fechas Mongo ({ $date: ... }) --- */
+function tsOf(v: any): number {
+  if (!v) return 0;
+  if (typeof v === "number") return isNaN(v) ? 0 : v;
+  if (v && typeof v === "object" && "$date" in v) {
+    const raw = (v as any)["$date"];
+    const d = new Date(typeof raw === "number" ? raw : String(raw));
+    return isNaN(d.getTime()) ? 0 : d.getTime();
   }
-  return undefined;
-};
-
-const NAME_AUTH_KEY = "chatlist.nameAuthority.v2";
-type NameAuthorityMap = Record<string, string>;
-function loadNameAuthority(): NameAuthorityMap {
-  try { return JSON.parse(localStorage.getItem(NAME_AUTH_KEY) || "{}"); } catch { return {}; }
-}
-function saveNameAuthority(map: NameAuthorityMap) {
-  try { localStorage.setItem(NAME_AUTH_KEY, JSON.stringify(map)); } catch {}
-}
-function authorityKeysForNames(clientId?: string, userId?: string, phoneDigits?: string) {
-  const keys: string[] = [];
-  if (clientId) keys.push(`client:${clientId}`);
-  if (userId)   keys.push(`user:${userId}`);
-  if (phoneDigits) keys.push(`tel:${phoneDigits}`);
-  return keys;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
-function canonicalClientKey(chat: any): string {
-  const clientId = safeStr(chat?.clientId || "");
-  const userId   = safeStr(chat?.userId   || "");
-  const phoneDig = onlyDigits(chat?.phone ?? chat?.client?.phone ?? chat?.metadata?.phone ?? chat?.meta?.phone ?? "");
-  return clientId || userId || (phoneDig ? `tel:${phoneDig}` : safeStr(chat?.chatId || chat?.id || "unknown"));
-}
-
-function resolveLastMessageTime(raw: any): number {
-  const cands = [raw?.lastMessageTime, raw?.lastMessageAt, raw?.last_activity_at, raw?.lastActivityAt, raw?.updatedAt, raw?.createdAt, raw?.timestamp, raw?.ts];
-  for (const v of cands) {
-    if (!v) continue;
-    const t = typeof v === "number" ? v : new Date(v).getTime();
-    if (!isNaN(t) && t > 0) return t;
-  }
-  return 0;
-}
 function normalizeChat(raw: any): any {
-  const cid = canonicalChatIdFrom(raw);
-  const phone = raw?.phone ?? raw?.client?.phone ?? raw?.user?.phone ?? raw?.metadata?.phone ?? raw?.meta?.phone ?? undefined;
+  const id = raw?.id ?? raw?._id ?? undefined;
+  const cid = canonicalChatIdFrom(raw) ?? id;
+
+  const phone =
+    raw?.phone ??
+    raw?.client?.phone ??
+    raw?.user?.phone ??
+    raw?.metadata?.phone ??
+    raw?.meta?.phone ??
+    undefined;
+
   const lastMessageText =
     typeof raw?.lastMessage === "object"
       ? raw?.lastMessage?.content ?? raw?.lastMessage?.text ?? ""
       : raw?.lastMessage ?? "";
-  const lastMessageTime = resolveLastMessageTime(raw);
-  return { ...raw, chatId: cid, phone, lastMessage: typeof raw?.lastMessage === "object" ? raw.lastMessage : lastMessageText, lastMessageTime };
+
+  const lastMessageTime =
+    [
+      raw?.lastMessageTime,
+      raw?.lastMessageAt,
+      raw?.last_activity_at,
+      raw?.lastActivityAt,
+      raw?.updatedAt,
+      raw?.createdAt,
+      raw?.timestamp,
+      raw?.ts,
+    ]
+      .map(tsOf)
+      .find((t) => t > 0) || 0;
+
+  return {
+    ...raw,
+    id: id ? String(id) : undefined,
+    _id: id ? String(id) : undefined,
+    chatId: cid ? String(cid) : undefined,
+    phone,
+    lastMessage: typeof raw?.lastMessage === "object" ? raw.lastMessage : lastMessageText,
+
+    // 👇 Siempre respetar clientName del back si viene
+    clientName:
+      raw?.clientName ??
+      raw?.client_name ??
+      raw?.metadata?.clientName ??
+      raw?.meta?.clientName ??
+      undefined,
+
+    // 👇 Añadimos specialistId/operatorId si vienen
+    specialistId: raw?.specialistId ?? raw?.operatorId ?? undefined,
+
+    lastMessageTime,
+    createdAt: tsOf(raw?.createdAt),
+    updatedAt: tsOf(raw?.updatedAt),
+  };
 }
+
 function isGhost(c: any): boolean {
-  const msg = safeStr(typeof c?.lastMessage === "object" ? (c?.lastMessage?.content ?? c?.lastMessage?.text) : c?.lastMessage).trim();
+  const msg = safeStr(
+    typeof c?.lastMessage === "object"
+      ? c?.lastMessage?.content ?? c?.lastMessage?.text
+      : c?.lastMessage
+  ).trim();
   const phone = onlyDigits(c?.phone ?? c?.client?.phone ?? "");
   const type = String(c?.type ?? "").toUpperCase();
   const assigned = !!(c?.specialistId || c?.operatorId);
-  return (!msg && !phone && type === "BOT" && !assigned);
+  return !msg && !phone && type === "BOT" && !assigned;
 }
+
 function scoreChat(c: any): number {
   const assigned = !!(c?.specialistId || c?.operatorId);
   const unread = Number(c?.unreadCount || 0) > 0;
-  const msg = safeStr(typeof c?.lastMessage === "object" ? (c?.lastMessage?.content ?? c?.lastMessage?.text) : c?.lastMessage).trim();
+  const msg = safeStr(
+    typeof c?.lastMessage === "object"
+      ? c?.lastMessage?.content ?? c?.lastMessage?.text
+      : c?.lastMessage
+  ).trim();
   const phone = onlyDigits(c?.phone ?? "");
-  const name = safeStr(c?.clientName).trim();
-  const nonGenericName = name && !isGenericClientLabel(name) ? 1 : 0;
   const type = String(c?.type ?? "").toUpperCase();
+
   let s = 0;
   if (assigned) s += 50;
   if (unread) s += 30;
   if (msg) s += 20;
   if (phone) s += 15;
-  if (nonGenericName) s += 5;
   if (type === "HUMAN_SUPPORT" || type === "HUMAN") s += 12;
   if (type === "BOT") s -= 4;
+
   return s;
 }
-function pickBetterChat(a: any, b: any): any {
-  const ag = isGhost(a); const bg = isGhost(b);
-  if (ag !== bg) return ag ? b : a;
-  const sa = scoreChat(a); const sb = scoreChat(b);
-  if (sa !== sb) return sb > sa ? b : a;
-  const at = Number(a?.lastMessageTime || a?.updatedAt || a?.createdAt || 0);
-  const bt = Number(b?.lastMessageTime || b?.updatedAt || b?.createdAt || 0);
-  if (at !== bt) return bt > at ? b : a;
-  const aScore = (safeStr(a?.phone).length > 0 ? 1 : 0) + (safeStr(a?.lastMessage?.content ?? a?.lastMessage).length > 0 ? 1 : 0);
-  const bScore = (safeStr(b?.phone).length > 0 ? 1 : 0) + (safeStr(b?.lastMessage?.content ?? b?.lastMessage).length > 0 ? 1 : 0);
-  return bScore > aScore ? b : a;
-}
-function pickBestForClient(cands: any[], authoritativeChatId?: string): any {
-  if (authoritativeChatId) {
-    const hit = cands.find(c => c.chatId === authoritativeChatId);
-    if (hit) return hit;
-  }
-  const nonGhosts = cands.filter(c => !isGhost(c));
+
+function pickBestForClient(cands: any[]): any {
+  const nonGhosts = cands.filter((c) => !isGhost(c));
   const pool = nonGhosts.length ? nonGhosts : cands;
+
   return pool.sort((a, b) => {
-    const sa = scoreChat(a); const sb = scoreChat(b);
+    const sa = scoreChat(a);
+    const sb = scoreChat(b);
     if (sa !== sb) return sb - sa;
     const at = Number(a?.lastMessageTime || a?.updatedAt || a?.createdAt || 0);
     const bt = Number(b?.lastMessageTime || b?.updatedAt || b?.createdAt || 0);
     return bt - at;
   })[0];
 }
+
 function shouldShow(chat: any): boolean {
   const cidOk = !!chat?.chatId;
   if (!cidOk) return false;
+
   const status = String(chat?.status ?? "").toUpperCase();
   if (status && !ALLOWED_STATUSES.has(status)) {
     if (["FINISHED", "COMPLETED", "CANCELLED", "ARCHIVED", "DELETED"].includes(status)) {
       if (Number(chat?.unreadCount || 0) <= 0) return false;
     }
   }
+
   const hasSomeIdentity =
     !!safeStr(chat?.clientName).trim() ||
     !!onlyDigits(chat?.phone ?? "") ||
@@ -189,16 +226,14 @@ function shouldShow(chat: any): boolean {
   const type = String(chat?.type ?? "").toUpperCase();
   const assigned = !!(chat?.specialistId || chat?.operatorId);
   const unread = Number(chat?.unreadCount || 0) > 0;
+
   const now = new Date();
-  if (type === "BOT" && !assigned && !unread && minutesBetween(now, last) > HIDE_STALE_MINUTES) return false;
+  if (type === "BOT" && !assigned && !unread && minutesBetween(now, last) > HIDE_STALE_MINUTES)
+    return false;
   if (!hasSomeIdentity && minutesBetween(now, last) > 30 * 24 * 60) return false;
+
   return true;
 }
-
-const AUTH_KEY = "chatlist.authority.v2";
-type AuthorityMap = Record<string, string>;
-function loadAuthority(): AuthorityMap { try { return JSON.parse(localStorage.getItem(AUTH_KEY) || "{}"); } catch { return {}; } }
-function saveAuthority(map: AuthorityMap) { try { localStorage.setItem(AUTH_KEY, JSON.stringify(map)); } catch {} }
 
 const listHeightClass = "h-[calc(100dvh-200px)]";
 const DEFAULT_PAGE_SIZE = 10;
@@ -206,42 +241,63 @@ const PAGE_STEP = 10;
 
 const getStatusColor = (status: string) => {
   switch ((status || "").toUpperCase()) {
-    case "ACTIVE": return "bg-green-500";
-    case "WAITING": return "bg-amber-500";
+    case "ACTIVE":
+      return "bg-green-500";
+    case "WAITING":
+      return "bg-amber-500";
     case "FINISHED":
-    case "COMPLETED": return "bg-gray-400";
-    case "CANCELLED": return "bg-red-400";
-    case "IN_QUEUE": return "bg-blue-400";
-    case "TIMEOUT_FALLBACK": return "bg-purple-400";
+    case "COMPLETED":
+      return "bg-gray-400";
+    case "CANCELLED":
+      return "bg-red-400";
+    case "IN_QUEUE":
+      return "bg-blue-400";
+    case "TIMEOUT_FALLBACK":
+      return "bg-purple-400";
     case "ESCALATED":
-    case "ASSIGNED": return "bg-sky-500";
+    case "ASSIGNED":
+      return "bg-sky-500";
     case "OPEN":
     case "NEW":
     case "PENDING":
     case "HUMAN":
-    case "HUMAN_SUPPORT": return "bg-blue-500";
-    default: return "bg-gray-300";
+    case "HUMAN_SUPPORT":
+      return "bg-blue-500";
+    default:
+      return "bg-gray-300";
   }
 };
+
 const getStatusText = (status: string) => {
   switch ((status || "").toUpperCase()) {
-    case "ACTIVE": return "Activo";
-    case "WAITING": return "Esperando";
+    case "ACTIVE":
+      return "Activo";
+    case "WAITING":
+      return "Esperando";
     case "FINISHED":
-    case "COMPLETED": return "Finalizado";
-    case "CANCELLED": return "Cancelado";
-    case "IN_QUEUE": return "En cola";
-    case "TIMEOUT_FALLBACK": return "Fallback IA";
-    case "ESCALATED": return "Escalado";
-    case "ASSIGNED": return "Asignado";
-    case "OPEN": return "Abierto";
-    case "NEW": return "Nuevo";
-    case "PENDING": return "Pendiente";
+    case "COMPLETED":
+      return "Finalizado";
+    case "CANCELLED":
+      return "Cancelado";
+    case "IN_QUEUE":
+      return "En cola";
+    case "TIMEOUT_FALLBACK":
+      return "Fallback IA";
+    case "ESCALATED":
+    case "ASSIGNED":
+      return "Escalado";
+    case "OPEN":
+    case "NEW":
+    case "PENDING":
+      return "Pendiente";
     case "HUMAN":
-    case "HUMAN_SUPPORT": return "Humano";
-    default: return "Desconocido";
+    case "HUMAN_SUPPORT":
+      return "Humano";
+    default:
+      return "Desconocido";
   }
 };
+
 function formatTime(date?: number | Date | string) {
   if (!date) return "";
   const d = new Date(typeof date === "number" ? date : date);
@@ -255,12 +311,31 @@ function formatTime(date?: number | Date | string) {
   return d.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
 }
 
+/* ================= Props ================= */
+
 interface ChatListProps {
-  chats: ChatPreview[];
+  chats: ChatPreview[] & Array<Partial<{ mode: "BOT" | "AI" | "HUMAN"; botThinking: boolean }>>;
   selectedChatId: string | null;
   onChatSelect: (chatId: string) => void;
   onNewChat?: () => void;
   isLoading?: boolean;
+}
+
+function ModeBadge({ mode, thinking }: { mode?: "BOT" | "AI" | "HUMAN"; thinking?: boolean }) {
+  if (!mode) return null;
+  const classes =
+    mode === "HUMAN"
+      ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+      : mode === "AI"
+      ? "bg-purple-100 text-purple-700 border-purple-200"
+      : "bg-indigo-100 text-indigo-700 border-indigo-200";
+  const label = mode === "HUMAN" ? "Humano" : mode === "AI" ? "IA" : "Bot";
+  return (
+    <Badge className={cn("shrink-0", classes, "px-2 py-0.5 h-5 text-[11px]")}>
+      {label}
+      {thinking ? <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-current animate-pulse" /> : null}
+    </Badge>
+  );
 }
 
 export function ChatList({
@@ -276,115 +351,150 @@ export function ChatList({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState<number>(DEFAULT_PAGE_SIZE);
 
-  const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // OVERLAY: upserts por sockets sin refrescar
+  const [runtimeUpserts, setRuntimeUpserts] = useState<Record<string, any>>({});
+
+  const itemRefs = useRef<Record<string, HTMLDivElement | null>>({ });
   const scrollAreaRootRef = useRef<HTMLDivElement | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
 
-  const authorityRef = useRef<AuthorityMap>({});
-  useEffect(() => { authorityRef.current = loadAuthority(); }, []);
-  const recordAuthority = (gkey: string, chatId?: string) => {
-    const chid = safeStr(chatId).trim();
-    if (!gkey || !chid) return;
-    const map = { ...authorityRef.current, [gkey]: chid };
-    authorityRef.current = map;
-    saveAuthority(map);
-  };
-
-  const nameAuthorityRef = useRef<NameAuthorityMap>({});
-  useEffect(() => { nameAuthorityRef.current = loadNameAuthority(); }, []);
-
   const hadDataRef = useRef(false);
-  useEffect(() => { if (Array.isArray(chats) && chats.length > 0) hadDataRef.current = true; }, [chats]);
+  useEffect(() => {
+    if (Array.isArray(chats) && chats.length > 0) hadDataRef.current = true;
+  }, [chats]);
 
   useEffect(() => {
     if (!scrollAreaRootRef.current) return;
-    const vp = scrollAreaRootRef.current.querySelector<HTMLDivElement>("[data-radix-scroll-area-viewport]");
+    const vp =
+      scrollAreaRootRef.current.querySelector<HTMLDivElement>("[data-radix-scroll-area-viewport]");
     if (vp) scrollViewportRef.current = vp;
   }, []);
 
-  const normNoGhosts = useMemo(() => {
-    const normed = (Array.isArray(chats) ? chats : [])
-      .map(normalizeChat)
-      .filter(shouldShow);
+  const upsertRuntime = useCallback((partial: any) => {
+    const n = normalizeChat(partial);
+    const cid = n.chatId;
+    if (!cid) return;
+    setRuntimeUpserts((prev) => ({
+      ...prev,
+      [cid]: { ...(prev[cid] || {}), ...n },
+    }));
+  }, []);
 
-    const byId = new Map<string, any>();
-    for (const c of normed) {
-      const cid = c.chatId;
-      if (!cid) continue;
-      const prev = byId.get(cid);
-      if (!prev) byId.set(cid, c);
-      else byId.set(cid, pickBetterChat(prev, c));
+  // ---- listeners (wirea tu provider a estos window events) ----
+  useEffect(() => {
+    function onChatCreated(e: any) {
+      const chat = normalizeChat(e?.detail?.chat || e?.detail);
+      if (chat?.clientName) setCachedDisplayName(chat, String(chat.clientName));
+      upsertRuntime(chat);
     }
-    return Array.from(byId.values());
-  }, [chats]);
+    function onChatUpdated(e: any) {
+      const d = e?.detail?.chat || e?.detail;
+      const chat = normalizeChat(d);
+      if (chat?.clientName) setCachedDisplayName(chat, String(chat.clientName));
+      upsertRuntime({ ...chat, chatId: String(chat.chatId || chat.id || d.chatId) });
+    }
+    function onMessageNew(e: any) {
+      const d = e?.detail || {};
+      const now = Date.now();
+      const patch = {
+        chatId: String(d.chatId || d.chat_id || d.threadId || d.conversationId || ""),
+        lastMessage:
+          typeof d.message === "object" ? (d.message?.content ?? d.message?.text ?? "") : d.message,
+        lastMessageTime: now,
+        unreadCount: 1,
+        clientName: d.clientName ?? undefined,   // si viene, lo respetamos (DB suele propagarlo)
+        phone: d.phone ?? undefined,
+        userId: d.userId ?? undefined,
+      };
+      if (patch.clientName) setCachedDisplayName(patch, String(patch.clientName));
+      upsertRuntime(patch);
+    }
+    function onClientNameUpdated(e: any) {
+      const d = e?.detail || {};
+      const cid = String(d.chatId || "");
+      const name = String(d.clientName || "").trim();
+      if (!cid || !name) return;
+      upsertRuntime({ chatId: cid, clientName: name });
+    }
+
+    window.addEventListener("ws.chat.created", onChatCreated as any);
+    window.addEventListener("ws.chat.updated", onChatUpdated as any);
+    window.addEventListener("ws.message.new", onMessageNew as any);
+    window.addEventListener("clientNameUpdated", onClientNameUpdated as any);
+
+    return () => {
+      window.removeEventListener("ws.chat.created", onChatCreated as any);
+      window.removeEventListener("ws.chat.updated", onChatUpdated as any);
+      window.removeEventListener("ws.message.new", onMessageNew as any);
+      window.removeEventListener("clientNameUpdated", onClientNameUpdated as any);
+    };
+  }, [upsertRuntime]);
+
+  // props + overlay
+  const baseWithRuntime = useMemo(() => {
+    const src = (Array.isArray(chats) ? chats : []).map(normalizeChat);
+    const map = new Map<string, any>();
+    for (const c of src) if (c.chatId) map.set(c.chatId, c);
+    for (const [cid, patch] of Object.entries(runtimeUpserts)) {
+      const prev = map.get(cid) || {};
+      map.set(cid, { ...prev, ...patch });
+    }
+    return Array.from(map.values());
+  }, [chats, runtimeUpserts]);
+
+  const normNoGhosts = useMemo(() => baseWithRuntime.filter(shouldShow), [baseWithRuntime]);
 
   const uniqueByClient = useMemo(() => {
     const groups = new Map<string, any[]>();
     for (const c of normNoGhosts) {
-      const gkey = canonicalClientKey(c);
-      const arr = groups.get(gkey) || [];
-      arr.push(c); groups.set(gkey, arr);
+      const key =
+        safeStr(c?.clientId || c?.userId) ||
+        (onlyDigits(c?.phone || c?.client?.phone || "") && `tel:${onlyDigits(c?.phone || c?.client?.phone || "")}`) ||
+        safeStr(c?.chatId || c?.id || "");
+      const arr = groups.get(key) || [];
+      arr.push(c);
+      groups.set(key, arr);
     }
-    const result: any[] = [];
-    for (const [gkey, list] of Array.from(groups.entries())) {
-      const authoritativeChatId = authorityRef.current[gkey];
-      const best = list.length === 1 ? list[0] : pickBestForClient(list, authoritativeChatId);
-      result.push(best);
-    }
-    return result;
+    return Array.from(groups.values()).map((list) => pickBestForClient(list));
   }, [normNoGhosts]);
 
-  const sortedChats = useMemo(() => {
-    return [...uniqueByClient].sort((a: any, b: any) => {
-      const aTime = Number(a.lastMessageTime ?? a.updatedAt ?? a.createdAt ?? 0);
-      const bTime = Number(b.lastMessageTime ?? b.updatedAt ?? b.createdAt ?? 0);
-      return bTime - aTime;
-    });
-  }, [uniqueByClient]);
+  const sortedChats = useMemo(
+    () =>
+      [...uniqueByClient].sort((a: any, b: any) => {
+        const aTime = Number(a.lastMessageTime ?? a.updatedAt ?? a.createdAt ?? 0);
+        const bTime = Number(b.lastMessageTime ?? b.updatedAt ?? b.createdAt ?? 0);
+        return bTime - aTime;
+      }),
+    [uniqueByClient],
+  );
 
-  // === RESOLVER DISPLAY NAME (confía en el AUTHORITY si existe) ===
-  function resolveDisplayName(chat: any, nameAuthority: Record<string,string>): string {
-    // 1) authority primero (confianza total; acepta "usuario")
-    const digits  = onlyDigits(chat.phone ?? chat.client?.phone ?? chat.user?.phone ?? chat.metadata?.phone ?? chat.meta?.phone ?? "");
-    const clientId = safeStr(chat.clientId || "");
-    const userId   = safeStr(chat.userId   || "");
-    const keys = [
-      clientId && `client:${clientId}`,
-      userId   && `user:${userId}`,
-      digits   && `tel:${digits}`
-    ].filter(Boolean) as string[];
-    for (const k of keys) {
-      const v = (nameAuthority[k] || "").trim();
-      if (v) return toTitleCase(v);
-    }
-
-    // 2) luego campos directos del chat (seguimos evitando etiquetas tipo "Cliente 123…")
-    const direct = safeStr(chat.clientName || chat.client_name || chat.nombreCliente || chat.nombre_cliente);
-    if (isGoodName(direct) && !isGenericClientLabel(direct)) return toTitleCase(direct)!;
-
-    const nested =
-      pickFirstNonEmpty(
-        chat.name, chat.displayName, chat.display_name, chat.customerName, chat.customer_name,
-        chat.user?.name, chat.user?.fullName, [chat.user?.firstName, chat.user?.lastName].filter(Boolean).join(" "),
-        chat.client?.name, chat.client?.fullName, [chat.client?.firstName, chat.client?.lastName].filter(Boolean).join(" "),
-        chat.metadata?.client?.name, chat.meta?.client?.name
-      ) || "";
-    if (isGoodName(nested) && !isGenericClientLabel(nested)) return toTitleCase(nested)!;
-
-    // 3) fallback
-    if (digits) return `+${digits}`;
-    const short = safeStr(clientId || userId || chat.chatId || chat.id || "").slice(0, 8) || "—";
-    return `Cliente ${short}…`;
-  }
-
-  // 4) filtro (usa nameAuthority)
+  // Si llega clientName desde el back, sembrar caché y diccionario auxiliar
   useEffect(() => {
-    const term = safeLower(searchTerm).trim();
-    const phoneDigits = onlyDigits(phoneTerm.trim());
-    const nameAuthority = nameAuthorityRef.current;
+    for (const ch of sortedChats) {
+      const name = String(ch?.clientName || "").trim();
+      if (name && !/^\+?[\d\-\s\(\)]{6,}$/.test(name)) {
+        setCachedDisplayName(ch, name);
+        forcePersistClientName({
+          name,
+          clientId: safeStr(ch?.clientId ?? ch?.userId) || undefined,
+          phone: ch?.phone ? String(ch?.phone) : undefined,
+          chatId: String(ch?.chatId ?? ch?.id ?? ch?._id ?? ""),
+        });
+      }
+    }
+  }, [sortedChats]);
+
+  const displayNameOf = (chat: any) => getChatDisplayName(chat);
+
+  const [searchTermState, setSearchTermState] = useState({ s: "", p: "" });
+  useEffect(() => setSearchTermState({ s: searchTerm, p: phoneTerm }), [searchTerm, phoneTerm]);
+
+  useEffect(() => {
+    const term = safeLower(searchTermState.s).trim();
+    const phoneDigits = onlyDigits(searchTermState.p.trim());
 
     const filtered = (sortedChats ?? [])
-      .map((ch: any) => ({ ...ch, __displayName: resolveDisplayName(ch, nameAuthority) }))
+      .map((ch: any) => ({ ...ch, __displayName: displayNameOf(ch) }))
       .filter((chat: any) => {
         const displayName = safeLower(chat.__displayName);
         const byText =
@@ -396,85 +506,33 @@ export function ChatList({
               ? chat.lastMessage?.content ?? chat.lastMessage?.text ?? ""
               : chat.lastMessage
           ).includes(term);
-
         const chatPhoneDigits = onlyDigits(chat.phone ?? chat.client?.phone ?? "");
         const byPhone = !phoneDigits || chatPhoneDigits.includes(phoneDigits);
-
         return byText && byPhone;
       });
 
     setFilteredChats(filtered);
     if (expandedId && !filtered.some((c: any) => c.chatId === expandedId)) setExpandedId(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortedChats, searchTerm, phoneTerm]);
+  }, [sortedChats, searchTermState, expandedId]);
 
-  useEffect(() => { setVisibleCount(DEFAULT_PAGE_SIZE); }, [searchTerm, phoneTerm]);
+  useEffect(() => setVisibleCount(DEFAULT_PAGE_SIZE), [searchTerm, phoneTerm]);
 
   const displayedChats = useMemo(
     () => filteredChats.slice(0, Math.min(visibleCount, filteredChats.length)),
     [filteredChats, visibleCount]
   );
 
-  // ===== Listener de persistencia forzada (chat.name.force) =====
-  useEffect(() => {
-    function onForce(e: any) {
-      const d = e?.detail || {};
-      const name = (d.name || "").trim();
-      if (!name) return;
-
-      const digits = onlyDigits(d.phone || "");
-      const keys = authorityKeysForNames(safeStr(d.clientId), safeStr(d.userId), digits);
-      if (keys.length === 0) return;
-
-      // 1) actualizar authority y persistir
-      const map = { ...(nameAuthorityRef.current || {}) };
-      let changed = false;
-      for (const k of keys) {
-        if (map[k] !== name) { map[k] = name; changed = true; }
-      }
-      if (changed) {
-        nameAuthorityRef.current = map;
-        saveNameAuthority(map);
-        setFilteredChats(prev => prev.map(x => ({ ...x }))); // re-render
-      }
-
-      // 2) parchear duplicados del mismo cliente si podemos (BOT/HUMAN)
-      try {
-        const gkey = d.clientId || d.userId || (digits ? `tel:${digits}` : "");
-        if (!gkey) return;
-        const matches = (normNoGhosts || []).filter(ch => canonicalClientKey(ch) === gkey);
-        for (const c of matches) {
-          const chid = c?.chatId || c?.id;
-          if (chid) patchChatClientName(String(chid), name, d.token).catch(() => {});
-        }
-      } catch {}
-    }
-    window.addEventListener("chat.name.force", onForce as any);
-    return () => window.removeEventListener("chat.name.force", onForce as any);
-  }, [normNoGhosts]);
-
-  // ===== mantener scroll/selección =====
-  const prevListRef = useRef<any[]>(displayedChats);
-  const prevScrollHRef = useRef<number>(0);
   useLayoutEffect(() => {
     const vp = scrollViewportRef.current;
-    if (vp) prevScrollHRef.current = vp.scrollHeight;
+    if (vp) (vp as any).__prevScrollH = vp.scrollHeight;
   }, [displayedChats]);
+
   useLayoutEffect(() => {
     const vp = scrollViewportRef.current;
     if (!vp) return;
-    const prevFirst = prevListRef.current[0]?.chatId;
-    const currFirst = displayedChats[0]?.chatId;
-    const prevFirstStillInside = prevFirst && (displayedChats as any[]).some((c) => c.chatId === prevFirst);
-    const isPrepend = prevFirst && currFirst && prevFirst !== currFirst && prevFirstStillInside;
-    if (isPrepend) {
-      const prevBehavior = (vp as any).style?.scrollBehavior;
-      (vp as any).style.scrollBehavior = "auto";
-      const delta = vp.scrollHeight - prevScrollHRef.current;
-      if (delta > 0) vp.scrollTop += delta;
-      (vp as any).style.scrollBehavior = prevBehavior || "";
-    }
-    prevListRef.current = displayedChats;
+    const prevH = (vp as any).__prevScrollH || 0;
+    const delta = vp.scrollHeight - prevH;
+    if (delta > 0) vp.scrollTop += delta;
   }, [displayedChats]);
 
   useEffect(() => {
@@ -483,13 +541,21 @@ export function ChatList({
     if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [selectedChatId]);
 
-  const setItemRef = useCallback((chatId: string) => (el: HTMLDivElement | null) => {
-    itemRefs.current[chatId] = el;
-  }, []);
+  const setItemRef = useCallback(
+    (chatId: string) => (el: HTMLDivElement | null) => {
+      itemRefs.current[chatId] = el;
+    },
+    []
+  );
 
-  const toggleExpand = (id: string) => setExpandedId((prev) => (prev === id ? null : id));
-  const openWA = (phone?: string) => { const d = onlyDigits(phone ?? ""); if (d) window.open(`https://wa.me/${d}`, "_blank", "noopener,noreferrer"); };
-  const callTel = (phone?: string) => { const d = onlyDigits(phone ?? ""); if (d) window.location.href = `tel:+${d}`; };
+  const openWA = (phone?: string) => {
+    const d = onlyDigits(phone ?? "");
+    if (d) window.open(`https://wa.me/${d}`, "_blank", "noopener,noreferrer");
+  };
+  const callTel = (phone?: string) => {
+    const d = onlyDigits(phone ?? "");
+    if (d) window.location.href = `tel:+${d}`;
+  };
 
   const canLoadMore = visibleCount < filteredChats.length;
   const handleLoadMore = () => setVisibleCount((prev) => Math.min(prev + PAGE_STEP, filteredChats.length));
@@ -502,11 +568,23 @@ export function ChatList({
             <MessageSquare className="h-6 w-6 mr-3 text-sky-500" />
             Chats ({filteredChats.length})
           </CardTitle>
-          {onNewChat && (
-            <Button size="sm" onClick={onNewChat} className="bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 shadow-md">
-              Nuevo Chat
+
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" className="gap-2" title="Enviar mensajes masivos">
+              <Megaphone className="h-4 w-4" />
+              Difusión
             </Button>
-          )}
+
+            {onNewChat && (
+              <Button
+                size="sm"
+                onClick={onNewChat}
+                className="bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 shadow-md"
+              >
+                Nuevo Chat
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -539,7 +617,7 @@ export function ChatList({
 
         <div ref={scrollAreaRootRef}>
           <ScrollArea className={`w-full ${listHeightClass}`}>
-            {(!hadDataRef.current && isLoading) ? (
+            {!hadDataRef.current && isLoading ? (
               <div className="p-4 space-y-4">
                 {Array.from({ length: 8 }).map((_, i) => (
                   <div key={i} className="flex items-center space-x-4 p-4 animate-pulse">
@@ -573,22 +651,15 @@ export function ChatList({
                     const isExpanded = expandedId === cid;
                     const phone = chat.phone as string | undefined;
 
-                    const displayName = chat.__displayName || resolveDisplayName(chat, nameAuthorityRef.current || {});
-                    interface ChatListItemProps {
-                      chat: any;
-                      cid: string;
-                      isExpanded: boolean;
-                      phone?: string;
-                      displayName: string;
-                    }
+                    const displayName = chat.__displayName || getChatDisplayName(chat);
 
-                    const getInitials = (displayName: string): string => {
-                      return displayName.trim()
-                        ? (displayName.trim().split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("") || "U")
-                        : "U";
-                    };
-
-                    const initials: string = getInitials(displayName);
+                    const initials =
+                      displayName
+                        .trim()
+                        .split(/\s+/)
+                        .slice(0, 2)
+                        .map((p: string[]) => p[0]?.toUpperCase() ?? "")
+                        .join("") || "U";
 
                     const lastMessageText =
                       safeStr(
@@ -596,14 +667,15 @@ export function ChatList({
                           ? chat.lastMessage?.content ?? chat.lastMessage?.text ?? ""
                           : chat.lastMessage
                       ) || "—";
-
-                    const showBotIcon = /(^hola\b)|(^¡hola\b)|bienvenido|asistente|bot/i.test(lastMessageText || "");
+                    const showBotIcon = /(^hola\b)|(^¡hola\b)|bienvenido|asistente|bot/i.test(
+                      lastMessageText || ""
+                    );
 
                     return (
                       <div
                         key={cid}
                         ref={setItemRef(cid)}
-                        onDoubleClick={() => setExpandedId(prev => prev === cid ? null : cid)}
+                        onDoubleClick={() => setExpandedId((prev) => (prev === cid ? null : cid))}
                         className={cn(
                           "group relative transition-colors duration-200",
                           isExpanded ? "bg-white" : "hover:bg-gradient-to-r hover:from-slate-50 hover:to-blue-50"
@@ -612,33 +684,27 @@ export function ChatList({
                         <div
                           className={cn(
                             "flex items-start p-4 cursor-pointer",
-                            selectedChatId === cid && "bg-gradient-to-r from-sky-50 to-blue-50 border-r-4 border-sky-500 shadow-sm"
+                            selectedChatId === cid &&
+                              "bg-gradient-to-r from-sky-50 to-blue-50 border-r-4 border-sky-500 shadow-sm"
                           )}
                           onClick={() => {
                             onChatSelect(cid);
-                            const gkey = canonicalClientKey(chat);
-                            recordAuthority(gkey, cid);
-                            // si ya tenemos un nombre “aceptable”, lo guardamos como authority
-                            const n = (displayName || "").trim();
-                            if (n) {
-                              const dig = onlyDigits(phone || "");
-                              const keys = authorityKeysForNames(safeStr(chat?.clientId), safeStr(chat?.userId), dig);
-                              if (keys.length) {
-                                const map = { ...(nameAuthorityRef.current || {}) };
-                                let changed = false;
-                                for (const k of keys) { if (map[k] !== n) { map[k] = n; changed = true; } }
-                                if (changed) {
-                                  nameAuthorityRef.current = map;
-                                  saveNameAuthority(map);
-                                }
-                              }
+                            if (displayName && !/^\+?[\d\-\s\(\)]{6,}$/.test(displayName)) {
+                              setCachedDisplayName(chat, displayName);
                             }
                           }}
                         >
                           {/* Avatar */}
                           <div className="relative mr-4 mt-0.5 shrink-0">
-                            <Avatar className={cn("h-14 w-14 shadow-sm", selectedChatId === cid && "ring-2 ring-sky-200")}>
-                              {chat.avatar ? <AvatarImage src={chat.avatar} alt={displayName} /> : null}
+                            <Avatar
+                              className={cn(
+                                "h-14 w-14 shadow-sm",
+                                selectedChatId === cid && "ring-2 ring-sky-200"
+                              )}
+                            >
+                              {chat.avatar ? (
+                                <AvatarImage src={chat.avatar} alt={displayName} />
+                              ) : null}
                               <AvatarFallback className="bg-gradient-to-r from-blue-100 to-blue-200 text-blue-700 font-semibold">
                                 {initials || <User className="h-6 w-6" />}
                               </AvatarFallback>
@@ -652,12 +718,17 @@ export function ChatList({
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <div className="flex min-w-0 flex-1 items-center gap-2">
-                                <h4 className="font-bold text-gray-800 truncate text-lg">{displayName}</h4>
+                                <h4 className="font-bold text-gray-800 truncate text-lg">
+                                  {displayName}
+                                </h4>
+
                                 {chat.channel === "ECOM" && (
                                   <Badge className="shrink-0 bg-green-100 text-green-700 border border-green-200">
                                     E-commerce
                                   </Badge>
                                 )}
+
+                                <ModeBadge mode={chat.mode} thinking={chat.botThinking} />
                               </div>
 
                               <Button
@@ -665,17 +736,28 @@ export function ChatList({
                                 size="icon"
                                 variant="ghost"
                                 className="h-7 w-7 opacity-70 hover:opacity-100 shrink-0"
-                                onClick={(e) => { e.stopPropagation(); setExpandedId(prev => prev === cid ? null : cid); }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedId((prev) => (prev === cid ? null : cid));
+                                }}
                                 title={isExpanded ? "Contraer" : "Expandir"}
                               >
-                                {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                {isExpanded ? (
+                                  <ChevronUp className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
                               </Button>
                             </div>
 
                             {/* Teléfono + estado */}
                             <div className="flex items-center justify-between mt-0.5">
                               <div className="flex items-center gap-2">
-                                {phone && <span className="text-xs text-gray-500 font-mono">+{onlyDigits(phone)}</span>}
+                                {phone && (
+                                  <span className="text-xs text-gray-500 font-mono">
+                                    +{onlyDigits(phone)}
+                                  </span>
+                                )}
                                 <div className="flex items-center gap-1">
                                   <div className={cn("w-2 h-2 rounded-full shadow-sm", getStatusColor(chat.status))} />
                                   <span className="text-xs text-gray-500">{getStatusText(chat.status)}</span>
@@ -687,8 +769,15 @@ export function ChatList({
                             </div>
 
                             {/* Mensaje */}
-                            <div className={cn("mt-1 text-sm text-gray-700", isExpanded ? "whitespace-normal break-words" : "truncate max-w-[260px]")}>
-                              {showBotIcon && <Bot className="inline h-3 w-3 mr-1 text-purple-500" />}
+                            <div
+                              className={cn(
+                                "mt-1 text-sm text-gray-700",
+                                isExpanded ? "whitespace-normal break-words" : "truncate max-w-[260px]"
+                              )}
+                            >
+                              {showBotIcon && (
+                                <BotIcon className="inline h-3 w-3 mr-1 text-purple-500" />
+                              )}
                               {lastMessageText}
                             </div>
 
@@ -705,13 +794,27 @@ export function ChatList({
                             {isExpanded && (
                               <div className="mt-3 flex items-center gap-2">
                                 {phone && (
-                                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); openWA(phone); }}>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openWA(phone);
+                                    }}
+                                  >
                                     <MessageSquareText className="h-4 w-4" />
                                     <span className="ml-1 text-xs">WhatsApp</span>
                                   </Button>
                                 )}
                                 {phone && (
-                                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); callTel(phone); }}>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      callTel(phone);
+                                    }}
+                                  >
                                     <Phone className="h-4 w-4" />
                                     <span className="ml-1 text-xs">Llamar</span>
                                   </Button>

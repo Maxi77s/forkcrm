@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,9 @@ import {
   Mic,
   MicOff,
   MessageCircle,
+  FileVideo,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/providers/auth-provider";
@@ -59,6 +62,9 @@ function computeActiveMode(msgs: any[], fallbackType?: string): Mode {
 export default function ChatOperator() {
   const { user, token } = useAuth();
 
+  // Obtenemos el hook una sola vez y luego sacamos state/actions (deja puerta a métodos opcionales)
+  const hook = useChatOperator({ token: token ?? undefined });
+
   const {
     state: {
       loading,
@@ -77,10 +83,18 @@ export default function ChatOperator() {
       handlePickImage,
       handleImageSelected,
       finishChat,
+      // 👉 nuevo: acción del hook para plantilla con video (si existe)
+      sendTemplateVideo,
     },
-  } = useChatOperator({ token: token ?? undefined });
+  } = hook;
 
-  // Enlaces rápidos (tel/wa)
+  // ====== OPCIONALES del orquestador (no rompen si no existen en tu hook) ======
+  const modeByChat = (hook as any)?.state?.modeByChat as Record<string, Mode> | undefined;
+  const botThinkingMap = (hook as any)?.state?.botThinking as Record<string, boolean> | undefined;
+  const takeOver = (hook as any)?.actions?.takeOver as ((chatId: string) => void) | undefined;
+  const release = (hook as any)?.actions?.release as ((chatId: string) => void) | undefined;
+
+  // Enlaces rápidos (tel/wa) — FIX: strings con template literal
   const e164 = onlyDigits(current?.phone);
   const telHref = e164 ? `tel:+${e164}` : undefined;
   const waChatHref = e164 ? `https://wa.me/${e164}` : undefined;
@@ -92,8 +106,7 @@ export default function ChatOperator() {
   const [camOn, setCamOn] = useState(false);
   const micStreamRef = useRef<MediaStream | null>(null);
   const camStreamRef = useRef<MediaStream | null>(null);
-  const stopStream = (s: MediaStream | null) =>
-    s?.getTracks().forEach((t) => t.stop());
+  const stopStream = (s: MediaStream | null) => s?.getTracks().forEach((t) => t.stop());
 
   const toggleMic = async () => {
     if (micOn) {
@@ -132,7 +145,7 @@ export default function ChatOperator() {
     };
   }, []);
 
-  // Auto–scroll al final cuando llegan mensajes
+  // Auto–scroll al final cuando llegan mensajes o cambia el seleccionado
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -163,8 +176,62 @@ export default function ChatOperator() {
 
   const renderChannelBadge = () => null;
 
-  // Modo activo (para iconos)
-  const activeMode: Mode = computeActiveMode(messages as any[], (current as any)?.type);
+  // ============== Panel Plantillas (video) ==============
+  const [tplOpen, setTplOpen] = useState(false);
+  const [tplTratamiento, setTplTratamiento] = useState<"depilacion" | "blanqueamiento" | "otro">("depilacion");
+  const [tplNombre, setTplNombre] = useState<string>("");
+  const [tplVideoFile, setTplVideoFile] = useState<File | null>(null);
+  const [tplSending, setTplSending] = useState(false);
+  const tplFileRef = useRef<HTMLInputElement>(null);
+
+  // precompletar el nombre cuando cambia el chat
+  useEffect(() => {
+    setTplNombre(current?.clientName ?? "");
+  }, [current?.clientName, selectedChatId]);
+
+  const handleTplPickVideo = () => tplFileRef.current?.click();
+  const handleTplFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] || null;
+    setTplVideoFile(f);
+  };
+
+  const handleTplSend = async () => {
+    if (!current?.phone) {
+      Swal.fire({ icon: "error", title: "Falta teléfono", text: "El chat no tiene número asociado." });
+      return;
+    }
+    if (!tplVideoFile) {
+      Swal.fire({ icon: "warning", title: "Adjunta un video", text: "Selecciona un archivo .mp4 o .3gp" });
+      return;
+    }
+    setTplSending(true);
+    try {
+      await sendTemplateVideo?.({
+        tratamiento: tplTratamiento,
+        nombre_cliente: tplNombre || "Cliente",
+        file: tplVideoFile,
+      });
+      setTplOpen(false);
+      setTplVideoFile(null);
+      Swal.fire({ icon: "success", title: "Plantilla enviada" });
+    } catch (e: any) {
+      Swal.fire({ icon: "error", title: "No se pudo enviar", text: e?.message || "Revisa el archivo e intenta de nuevo" });
+    } finally {
+      setTplSending(false);
+    }
+  };
+
+  // ====== Modo activo / Thinking: preferimos orquestador si existe; si no, inferimos por mensajes
+  const orchestratorMode = useMemo<Mode | undefined>(() => {
+    if (!selectedChatId) return undefined;
+    const m = modeByChat?.[selectedChatId];
+    return m as Mode | undefined;
+  }, [modeByChat, selectedChatId]);
+
+  const inferredMode: Mode = computeActiveMode(messages as any[], (current as any)?.type);
+  const activeMode: Mode = orchestratorMode ?? inferredMode;
+
+  const isThinking = !!(selectedChatId && botThinkingMap?.[selectedChatId]);
 
   return (
     <div className="grid h-[calc(100dvh-2rem)] w-full gap-4 md:grid-cols-[340px_1fr]">
@@ -197,7 +264,7 @@ export default function ChatOperator() {
         <Separator />
         <CardContent className="p-0 flex-1">
           <ChatList
-            chats={chatPreviews}
+            chats={chatPreviews as any} // si tu preview incluye { mode, botThinking }, se mostrarán en badges
             selectedChatId={selectedChatId ?? null}
             onChatSelect={(id) => setSelectedChatId(id ?? undefined)}
             isLoading={loading}
@@ -207,7 +274,7 @@ export default function ChatOperator() {
 
       {/* Columna derecha */}
       <Card className="relative flex min-h-0 flex-col overflow-hidden">
-        {/* 🔵 Tira flotante, centrada. (ÚNICA) */}
+        {/* 🔵 Tira flotante, centrada (modo actual) */}
         <ChatModeStrip
           mode={activeMode}
           size="md"
@@ -232,7 +299,7 @@ export default function ChatOperator() {
               <div className="flex items-center gap-2">
                 <p className="truncate text-sm font-medium leading-none">
                   {current
-                    ? current.clientName ?? `Cliente ${current.clientId.slice(0, 8)}…`
+                    ? (current.clientName ?? `Cliente ${current.clientId.slice(0, 8)}…`)
                     : "Selecciona un chat"}
                 </p>
                 {renderChannelBadge()}
@@ -249,6 +316,13 @@ export default function ChatOperator() {
                   <span className="text-xs text-muted-foreground">
                     {current.isOnline ? "En línea" : "Desconectado"}
                   </span>
+                  {/* Indicador de IA pensando, si el hook lo trae */}
+                  {isThinking && (
+                    <span className="ml-2 inline-flex items-center gap-2 text-[11px] text-zinc-500">
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-400 animate-pulse" />
+                      La IA está redactando…
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -259,10 +333,20 @@ export default function ChatOperator() {
               </Badge>
             )}
 
-            {/* ❌ Quitamos la tira dentro del header para evitar duplicado */}
-            {/* <ChatModeStrip mode={activeMode} size="md" className="ml-2 flex-shrink-0" /> */}
-
             <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+              {/* Botón para abrir panel de plantillas */}
+              <Button
+                size="sm"
+                variant={tplOpen ? "default" : "outline"}
+                onClick={() => setTplOpen((v) => !v)}
+                disabled={!current?.phone}
+                title={current?.phone ? "Enviar plantilla con video" : "Este chat no tiene teléfono"}
+              >
+                <FileVideo className="h-4 w-4" />
+                <span className="ml-1 text-xs hidden sm:inline">Plantilla</span>
+                {tplOpen ? <ChevronUp className="ml-1 h-3 w-3" /> : <ChevronDown className="ml-1 h-3 w-3" />}
+              </Button>
+
               {waChatHref && (
                 <Button size="sm" variant="outline" asChild title="Abrir chat en WhatsApp">
                   <a href={waChatHref} target="_blank" rel="noopener noreferrer">
@@ -312,6 +396,31 @@ export default function ChatOperator() {
               >
                 {camOn ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
               </Button>
+
+              {/* Controles opcionales de orquestador */}
+              {selectedChatId && takeOver && activeMode !== "HUMAN" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => takeOver(selectedChatId)}
+                  className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                  title="Tomar control (pasar a HUMANO)"
+                >
+                  Tomar control
+                </Button>
+              )}
+              {selectedChatId && release && activeMode === "HUMAN" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => release(selectedChatId)}
+                  className="text-indigo-700 border-indigo-300 hover:bg-indigo-50"
+                  title="Liberar control (volver a BOT/IA)"
+                >
+                  Liberar
+                </Button>
+              )}
+
               <Button
                 size="sm"
                 variant="destructive"
@@ -324,6 +433,71 @@ export default function ChatOperator() {
             </div>
           </div>
         </CardHeader>
+
+        {/* ======= Panel plegable de Plantillas (video) ======= */}
+        {tplOpen && (
+          <div className="border-b bg-muted/40 p-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 items-center">
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">Tratamiento</span>
+                <select
+                  className="h-9 rounded-md border bg-background px-2 text-sm"
+                  value={tplTratamiento}
+                  onChange={(e) =>
+                    setTplTratamiento(e.target.value as "depilacion" | "blanqueamiento" | "otro")
+                  }
+                >
+                  <option value="depilacion">depilacion</option>
+                  <option value="blanqueamiento">blanqueamiento</option>
+                  <option value="otro">otro</option>
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1 md:col-span-2">
+                <span className="text-xs text-muted-foreground">Nombre del cliente</span>
+                <Input
+                  value={tplNombre}
+                  onChange={(e) => setTplNombre(e.target.value)}
+                  placeholder="Nombre del cliente"
+                />
+              </div>
+
+              <div className="flex items-end gap-2">
+                <input
+                  ref={tplFileRef}
+                  type="file"
+                  accept="video/mp4,video/3gpp,video/*"
+                  className="hidden"
+                  onChange={handleTplFileSelected}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleTplPickVideo}
+                  disabled={!current?.phone || tplSending}
+                  title="Adjuntar video (mp4/3gp)"
+                >
+                  <FileVideo className="h-4 w-4" />
+                  <span className="ml-1 text-xs">Adjuntar video</span>
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleTplSend}
+                  disabled={!current?.phone || !tplVideoFile || tplSending}
+                  title="Enviar plantilla"
+                >
+                  {tplSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+
+            {tplVideoFile && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Archivo seleccionado: <span className="font-medium">{tplVideoFile.name}</span>
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Mensajes */}
         <div className="flex min-h-0 flex-1 flex-col">
@@ -346,7 +520,7 @@ export default function ChatOperator() {
             </div>
           </ScrollArea>
 
-          {/* Input */}
+          {/* Input de texto + imagen (caption usa el input) */}
           <div className="border-t p-3">
             <div className="flex items-center gap-2">
               <Input
@@ -381,6 +555,7 @@ export default function ChatOperator() {
                 type="button"
                 onClick={handleSend}
                 disabled={!current || !message.trim() || localSending}
+                title={activeMode !== "HUMAN" && takeOver && selectedChatId ? "Enviar (hará takeover automático)" : "Enviar"}
               >
                 {localSending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />

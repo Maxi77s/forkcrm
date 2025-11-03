@@ -1,13 +1,5 @@
-/* ============================================================
- * Helper Operadores + Chat (FRONT) — completo
- * - Crea chat con clientName (y metadata.clientName)
- * - Si back devuelve clientName null, intenta PATCH
- * - postChatMessage hace fallback si /chat/:id/messages no existe
- * - Exporta ensureOperatorContext + assignWithAutoHeal
- * - FIX: exporta createOperatorDirect (para login-form.tsx)
- * - NUEVO: exporta fetchUserNamesByIds(ids) para hidratar nombres por userId
- * - NUEVO: exporta forcePersistClientName(...) para cache local + patch opcional
- * ============================================================ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { getHttpBase } from "@/lib/env.client";
 
 type Json = Record<string, any>;
 
@@ -30,17 +22,88 @@ function __findChatByPhoneLocal(list: any[], phoneE164: string): any | undefined
   return list.find((c) => __digits(__getPhoneFromItem(c)) === want);
 }
 
-
 /* ----------------------- Base URL ----------------------- */
+function normalizeBase(b?: string) {
+  if (!b) return "";
+  try {
+    return b.replace(/\/+$/, "");
+  } catch {
+    return b;
+  }
+}
+
 export function resolveApiBase(): string {
-  const raw =
-    process.env.NEXT_PUBLIC_API_URL ||
-    process.env.NEXT_PUBLIC_ECOM_BASE_URL ||
-    process.env.NEXT_PUBLIC_API_BASE_URL ||
-    "http://localhost:3002";
-  return raw.replace(/\/+$/, "");
+  // Centraliza en el helper común (lee NEXT_PUBLIC_* y normaliza)
+  // Puede venir vacío y lo normalizamos a "" para que los fallbacks actúen.
+  return normalizeBase(getHttpBase() || "");
 }
 export const API_BASE = resolveApiBase();
+
+// Fallbacks locales cuando el back deployeado no responde
+const FALLBACK_BASES = [
+  "http://localhost:3002",
+  "http://127.0.0.1:3002",
+];
+
+/**
+ * tryFetch: intenta la petición contra la URL primaria (API_BASE) y si falla por
+ * network error intenta los fallbacks locales. Devuelve el primer Response
+ * obtenido (aunque sea con status != 2xx). Si todas las opciones fallan por
+ * excepción, lanza el último error.
+ *
+ * - urlOrPath: puede ser:
+ *    - una ruta absoluta que empiece por '/' -> se concatena con bases candidate
+ *    - una URL completa (http(s)://...) -> se intenta primero tal cual, y si
+ *      contiene API_BASE se probarán reemplazándolo por los fallbacks
+ *    - una ruta relativa sin '/' -> se concatena con bases candidate añadiendo '/'
+ */
+async function tryFetch(urlOrPath: string, options?: RequestInit): Promise<Response> {
+  const primaryBase = API_BASE || "";
+  const isAbsolutePath = urlOrPath.startsWith("/");
+  const isFullUrl = /^https?:\/\//i.test(urlOrPath);
+
+  const candidates: string[] = [];
+
+  if (isFullUrl) {
+    candidates.push(urlOrPath);
+    if (primaryBase && urlOrPath.includes(primaryBase)) {
+      for (const fb of FALLBACK_BASES) {
+        candidates.push(urlOrPath.replace(primaryBase, fb));
+      }
+    } else {
+      for (const fb of FALLBACK_BASES) {
+        // si es full url pero no contiene primaryBase, también intentamos con los fallbacks sobre el path
+        try {
+          const u = new URL(urlOrPath);
+          candidates.push(`${fb}${u.pathname}${u.search}`);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } else {
+    // path or relative
+    const path = isAbsolutePath ? urlOrPath : `/${urlOrPath.replace(/^\/+/, "")}`;
+    if (primaryBase) candidates.push(`${primaryBase}${path}`);
+    // try origin-relative (useful in dev with proxy)
+    candidates.push(path);
+    for (const fb of FALLBACK_BASES) candidates.push(`${fb}${path}`);
+  }
+
+  let lastErr: any = new Error("No fetch candidates");
+  for (const c of candidates) {
+    try {
+      // prefer trying with the same headers / options
+      const resp = await fetch(c, options);
+      return resp;
+    } catch (err) {
+      lastErr = err;
+      // console.debug(`[tryFetch] failed candidate ${c}:`, err);
+      // seguir con siguiente candidato
+    }
+  }
+  throw lastErr;
+}
 
 /* ----------------------- Normalizador de IDs ----------------------- */
 function toIdString(v: any): string {
@@ -144,20 +207,22 @@ export async function ensureOperatorForUser(input?: {
   return { ok: false, message: "No operator id available to persist locally" };
 }
 
-/* 👉 FIX: export que pedía tu build */
-export async function createOperatorDirect(payload: {
+/* ---------- DTO ampliado para evitar el error TS ---------- */
+export type CreateOperatorDTO = {
   dni: number;
   email: string;
   name: string;
   password?: string;
-}) {
-  // Si tenés endpoint real, reemplazá por POST a tu API y guardá el id real.
-  const fakeId = String(payload.dni || Date.now());
-  saveOperatorLocal(fakeId, { name: payload.name, email: payload.email });
-  return { id: fakeId, ...payload };
-}
+  role?: "OPERADOR" | "ADMIN" | "CLIENT";
+  isAvailable?: boolean;
+};
 
-/* ----------------------- HTTP utils ----------------------- */
+export type CreateOperatorDirectResponse = {
+  id: string;
+  [k: string]: any;
+};
+
+/* ----------------------- tryFetch-backed HTTP utils ----------------------- */
 async function safeParseJSON(r: Response) {
   const raw = await r.text();
   if (!raw) return { ok: true, json: undefined, raw: "" };
@@ -173,22 +238,77 @@ function headers(token?: string) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
-async function POST(url: string, body?: Json, token?: string) {
-  return fetch(url, {
+
+async function POST(pathOrUrl: string, body?: Json, token?: string) {
+  const options: RequestInit = {
     method: "POST",
     headers: headers(token),
     body: body ? JSON.stringify(body) : undefined,
-  });
+  };
+  return tryFetch(pathOrUrl, options);
 }
-async function GET(url: string, token?: string) {
-  return fetch(url, { method: "GET", headers: headers(token) });
+async function GET(pathOrUrl: string, token?: string) {
+  const options: RequestInit = { method: "GET", headers: headers(token) };
+  return tryFetch(pathOrUrl, options);
 }
-async function PATCH(url: string, body: Json, token?: string) {
-  return fetch(url, {
+async function PATCH(pathOrUrl: string, body: Json, token?: string) {
+  const options: RequestInit = {
     method: "PATCH",
     headers: headers(token),
     body: JSON.stringify(body),
-  });
+  };
+  return tryFetch(pathOrUrl, options);
+}
+
+/* ----------------------- FIXED createOperatorDirect ----------------------- */
+/* 👉 reemplazar función completa */
+export async function createOperatorDirect(payload: CreateOperatorDTO): Promise<CreateOperatorDirectResponse> {
+  const body = {
+    ...payload,
+    role: "OPERADOR", // fuerza rol operador
+    isAvailable: payload.isAvailable ?? true,
+  };
+
+  // 1) Preferido: POST /operators (si tu back lo tiene)
+  try {
+    const r = await POST("/operators", body);
+    if (r.ok) {
+      const j = await r.json().catch(() => ({}));
+      const id = toIdString(j?.id ?? j?._id ?? j?.operatorId ?? j?.userId);
+      if (id) {
+        saveOperatorLocal(id, { name: j?.name ?? payload.name, email: j?.email ?? payload.email });
+        return { id, ...j };
+      }
+    } else if (r.status !== 404) {
+      // si existe y falla por otra cosa, levantamos error para que se vea en el toast
+      throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    // continúa con fallback
+    console.warn("[createOperatorDirect] /operators falló o no existe:", e);
+  }
+
+  // 2) Alternativa: POST /auth/register con rol OPERADOR
+  try {
+    const r = await POST("/auth/register", body);
+    if (r.ok) {
+      const j = await r.json().catch(() => ({}));
+      const id = toIdString(j?.operatorId ?? j?.id ?? j?._id ?? j?.userId);
+      if (id) {
+        saveOperatorLocal(id, { name: payload.name, email: payload.email });
+        return { id, ...j };
+      }
+    } else if (r.status !== 404) {
+      throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    console.warn("[createOperatorDirect] /auth/register falló:", e);
+  }
+
+  // 3) Último recurso: fake local (permite seguir desarrollando sin back)
+  const fakeId = String(payload.dni || Date.now());
+  saveOperatorLocal(fakeId, { name: payload.name, email: payload.email });
+  return { id: fakeId, ...payload };
 }
 
 /* ----------------------- Tipos ----------------------- */
@@ -303,11 +423,10 @@ export async function assignOperator(
   token?: string,
   operatorId?: string
 ): Promise<AssignResult> {
-  const url = `${API_BASE}/operators/assign`;
   const authToken = token || readTokenFromStorage();
 
   try {
-    const r = await fetch(url, { method: "POST", headers: headers(authToken) });
+    const r = await tryFetch("/operators/assign", { method: "POST", headers: headers(authToken) });
     const parsed = await safeParseJSON(r);
 
     if (!r.ok) {
@@ -375,7 +494,7 @@ export async function assignOperator(
   // 2) intento con body {operatorId}
   const id = operatorId || readOperatorIdFromStorage();
   try {
-    const r2 = await fetch(url, {
+    const r2 = await tryFetch("/operators/assign", {
       method: "POST",
       headers: headers(authToken),
       body: JSON.stringify({ operatorId: id }),
@@ -437,8 +556,7 @@ export async function assignOperator(
 }
 
 export async function releaseOperator(operatorId: string, token?: string) {
-  const url = `${API_BASE}/operators/${operatorId}/release`;
-  const r = await fetch(url, {
+  const r = await tryFetch(`/operators/${operatorId}/release`, {
     method: "POST",
     headers: headers(token || readTokenFromStorage()),
   });
@@ -496,9 +614,8 @@ export async function getActiveChats(
     return { ok: false, reason: "INVALID_JSON", message: "invalid operatorId" };
   }
 
-  const url = `${API_BASE}/operators/${encodeURIComponent(id)}/active-chats`;
   try {
-    const r = await fetch(url, {
+    const r = await tryFetch(`/operators/${encodeURIComponent(id)}/active-chats`, {
       headers: headers(token || readTokenFromStorage()),
     });
     const p = await safeParseJSON(r);
@@ -532,15 +649,13 @@ export async function setOperatorState(
   state: "AVAILABLE" | "OFFLINE" | "BUSY",
   token?: string
 ) {
-  const url = `${API_BASE}/operators/${operatorId}/state`;
-  const r = await PATCH(url, { state }, token || readTokenFromStorage());
+  const r = await PATCH(`/operators/${encodeURIComponent(operatorId)}/state`, { state }, token || readTokenFromStorage());
   return r.ok;
 }
 
 export async function listAvailableOperators(token?: string): Promise<any[]> {
-  const url = `${API_BASE}/operators/available`;
   try {
-    const r = await fetch(url, {
+    const r = await tryFetch("/operators/available", {
       headers: headers(token || readTokenFromStorage()),
     });
     if (!r.ok) return [];
@@ -567,16 +682,14 @@ const CHAT_WITH_LAST_PATH =
   "/chat/with-last-message";
 
 export async function listChats(token?: string) {
-  const url = `${API_BASE}${CHAT_PATH}`;
-  const r = await GET(url, token || readTokenFromStorage());
+  const r = await GET(`${CHAT_PATH}`, token || readTokenFromStorage());
   const p = await safeParseJSON(r);
   if (!r.ok || !p.ok) throw new Error(p.raw || "HTTP error in listChats");
   return p.json as any[];
 }
 
 export async function listChatsWithLastMessage(token?: string) {
-  const url = `${API_BASE}${CHAT_WITH_LAST_PATH}`;
-  const r = await GET(url, token || readTokenFromStorage());
+  const r = await GET(`${CHAT_WITH_LAST_PATH}`, token || readTokenFromStorage());
   const p = await safeParseJSON(r);
   if (!r.ok || !p.ok)
     throw new Error(p.raw || "HTTP error in listChatsWithLastMessage");
@@ -584,8 +697,7 @@ export async function listChatsWithLastMessage(token?: string) {
 }
 
 export async function getChatMessages(chatId: string, token?: string) {
-  const url = `${API_BASE}${CHAT_PATH}/${encodeURIComponent(chatId)}/messages`;
-  const r = await GET(url, token || readTokenFromStorage());
+  const r = await GET(`${CHAT_PATH}/${encodeURIComponent(chatId)}/messages`, token || readTokenFromStorage());
   const p = await safeParseJSON(r);
   if (!r.ok || !p.ok) throw new Error(p.raw || "HTTP error in getChatMessages");
   return p.json as any[];
@@ -621,8 +733,6 @@ export async function createChat(
   },
   token?: string
 ) {
-  const url = `${API_BASE}${CHAT_PATH}/create`;
-
   const clientName = payload.clientName ?? payload.name ?? null;
   const body = {
     ...payload,
@@ -633,7 +743,7 @@ export async function createChat(
     },
   };
 
-  const r = await fetch(url, {
+  const r = await tryFetch(`${CHAT_PATH}/create`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -657,7 +767,7 @@ export async function patchChatClientName(
   token?: string
 ) {
   // preferido: PATCH /chat/:id
-  let r = await fetch(`${API_BASE}${CHAT_PATH}/${encodeURIComponent(chatId)}`, {
+  let r = await tryFetch(`${CHAT_PATH}/${encodeURIComponent(chatId)}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -668,17 +778,14 @@ export async function patchChatClientName(
 
   // si tu API no lo tiene, probamos /chat/:id/metadata
   if (r.status === 404) {
-    r = await fetch(
-      `${API_BASE}${CHAT_PATH}/${encodeURIComponent(chatId)}/metadata`,
-      {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ clientName }),
-      }
-    );
+    r = await tryFetch(`${CHAT_PATH}/${encodeURIComponent(chatId)}/metadata`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ clientName }),
+    });
   }
   return r.ok;
 }
@@ -756,11 +863,9 @@ export async function postChatMessage(
 
   // 1) Ruta estándar
   try {
-    const url1 = `${API_BASE}${CHAT_PATH}/${encodeURIComponent(
-      chatId
-    )}/messages`;
-    tried.push(url1);
-    const r1 = await fetch(url1, {
+    const url1 = `${CHAT_PATH}/${encodeURIComponent(chatId)}/messages`;
+    tried.push(`${API_BASE || "<origin>"}${url1}`);
+    const r1 = await tryFetch(url1, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -782,9 +887,9 @@ export async function postChatMessage(
 
   // 2) Fallback: POST /chat/messages
   try {
-    const url2 = `${API_BASE}${CHAT_PATH}/messages`;
-    tried.push(url2);
-    const r2 = await fetch(url2, {
+    const url2 = `${CHAT_PATH}/messages`;
+    tried.push(`${API_BASE || "<origin>"}${url2}`);
+    const r2 = await tryFetch(url2, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -826,7 +931,8 @@ export function mapChatWithLastToOperatorDTO(x: any): OperatorChatDTO {
   return {
     chatId: id,
     clientId: String(x?.clientId ?? x?.client_id ?? id),
-    clientName: x?.clientName ?? x?.client_name ?? "Cliente",
+    // 👇 NO seteamos "Cliente" por defecto para no contaminar cachés
+    clientName: x?.clientName ?? x?.client_name ?? undefined,
     status: (x?.status ?? "ACTIVE").toUpperCase?.() ?? "ACTIVE",
     isOnline: Boolean(x?.isOnline ?? true),
     lastMessageTime: lastTs ? new Date(lastTs).toISOString() : undefined,
@@ -835,6 +941,7 @@ export function mapChatWithLastToOperatorDTO(x: any): OperatorChatDTO {
     channel: x?.channel,
   };
 }
+
 
 /* ---------- Asignar un chat específico (si tu back lo soporta) ---------- */
 export async function ensureAssignmentForChat(
@@ -870,7 +977,7 @@ export async function ensureAssignmentForChat(
   if (opts?.canonicalChatId) payload.canonicalChatId = String(opts.canonicalChatId);
 
   try {
-    const r = await fetch(`${API_BASE}/operators/assign`, {
+    const r = await tryFetch("/operators/assign", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -939,7 +1046,6 @@ export async function requestOperatorForChat(input: {
   }
 
   const auth = token || readTokenFromStorage();
-  const url = `${API_BASE}/operators/assign`;
 
   const body: any = {
     chatId: String(chatId),
@@ -948,7 +1054,7 @@ export async function requestOperatorForChat(input: {
   if (operatorId) body.operatorId = String(operatorId);
 
   try {
-    const r = await fetch(url, {
+    const r = await tryFetch("/operators/assign", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -971,7 +1077,7 @@ export async function requestOperatorForChat(input: {
   }
 }
 
-/* ---------- Resolver de chatId autoritativo (evita "Chat no encontrado") ---------- */
+/* ---------- Resolver de chatId autoritativo ---------- */
 export function resolveAuthoritativeChatId(
   candidateChatId: string | undefined,
   knownChats: Array<{ chatId?: string; id?: string; clientId?: string; phone?: string; metadata?: any; meta?: any; client?: any; user?: any; canonicalChatId?: string }>,
@@ -1108,8 +1214,9 @@ export async function ensureBackendChatForPhoneSafe(
     try { await patchChatClientName(chatId, name, token); } catch {}
   }
 
-  map[phoneE164] = chatId;
-  savePhoneToChat(map);
+  const map2 = loadPhoneToChat();
+  map2[phoneE164] = chatId;
+  savePhoneToChat(map2);
   return chatId;
 }
 
@@ -1161,14 +1268,7 @@ export async function ensureAssignmentForChatSafe(
   return await ensureAssignmentForChat(_chatId, token, clientId, operatorId);
 }
 
-/* =================== NUEVO: Batch de nombres por userId =================== */
-/**
- * Intenta rutas comunes:
- * - POST /users/names         => {map:{id:name}} o {names:{id:name}}
- * - POST /users/by-ids        => {users:[{id,name|fullName|nombre|firstName,lastName}]}
- * - GET  /users/names?ids=1,2 => {map:{id:name}} o {names:{id:name}}
- * - Fallback GET /users/:id   => {id, name|fullName|nombre|firstName,lastName}
- */
+/* =================== Batch de nombres por userId =================== */
 export async function fetchUserNamesByIds(
   ids: string[],
   token?: string
@@ -1178,7 +1278,7 @@ export async function fetchUserNamesByIds(
 
   // 1) POST /users/names
   try {
-    const r = await POST(`${API_BASE}/users/names`, { ids }, auth);
+    const r = await POST("/users/names", { ids }, auth);
     if (r.ok) {
       const { ok, json } = await safeParseJSON(r);
       if (ok && json && typeof json === "object") {
@@ -1204,7 +1304,7 @@ export async function fetchUserNamesByIds(
 
   // 2) POST /users/by-ids
   try {
-    const r = await POST(`${API_BASE}/users/by-ids`, { ids }, auth);
+    const r = await POST("/users/by-ids", { ids }, auth);
     if (r.ok) {
       const { ok, json } = await safeParseJSON(r);
       if (ok && json) {
@@ -1231,7 +1331,7 @@ export async function fetchUserNamesByIds(
   // 3) GET /users/names?ids=...
   try {
     const q = encodeURIComponent(ids.join(","));
-    const r = await GET(`${API_BASE}/users/names?ids=${q}`, auth);
+    const r = await GET(`/users/names?ids=${q}`, auth);
     if (r.ok) {
       const { ok, json } = await safeParseJSON(r);
       if (ok && json && typeof json === "object") {
@@ -1245,7 +1345,7 @@ export async function fetchUserNamesByIds(
   const fallback: Record<string, string> = {};
   for (const id of ids) {
     try {
-      const r = await GET(`${API_BASE}/users/${encodeURIComponent(id)}`, auth);
+      const r = await GET(`/users/${encodeURIComponent(id)}`, auth);
       if (!r.ok) continue;
       const { ok, json } = await safeParseJSON(r);
       if (ok && json) {
@@ -1292,17 +1392,13 @@ export async function forcePersistClientName(opts: {
 
   // 1) persistencia local
   const map = __loadNameAuthority();
-  const keys: string[] = [];
-  if (opts.clientId) keys.push(`client:${String(opts.clientId)}`);
-  if (opts.userId)   keys.push(`user:${String(opts.userId)}`);
+  const arr: string[] = [];
+  if (opts.clientId) arr.push(`client:${String(opts.clientId)}`);
+  if (opts.userId)   arr.push(`user:${String(opts.userId)}`);
   const dig = __digitsOnly(opts.phone);
-  if (dig)           keys.push(`tel:${dig}`);
-
-  let changed = false;
-  for (const k of keys) {
-    if (!map[k] || map[k] !== n) { map[k] = n; changed = true; }
-  }
-  if (changed) __saveNameAuthority(map);
+  if (dig)           arr.push(`tel:${dig}`);
+  for (const k of arr) (map as any)[k] = n;
+  __saveNameAuthority(map);
 
   // 2) notificar a cualquier lista abierta para que re-renderice ya
   if (typeof window !== "undefined") {
