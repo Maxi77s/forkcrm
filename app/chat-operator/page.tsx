@@ -1,9 +1,11 @@
+// app/chat-operator/page.tsx
 "use client";
 
+import { Suspense } from "react";
 import ChatPanel from "@/components/operator/chat-panel";
 import { useSearchParams, useRouter } from "next/navigation";
 
-export default function Page() {
+function ChatOperatorContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -13,9 +15,16 @@ export default function Page() {
     <ChatPanel
       chatId={chatId}
       onChatFinished={() => {
-        // Cambiá esta ruta a donde quieras volver al cerrar el chat
         router.push("/dashboard/chats");
       }}
     />
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={<div>cargando chat…</div>}>
+      <ChatOperatorContent />
+    </Suspense>
   );
 }
