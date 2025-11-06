@@ -23,16 +23,37 @@ jobs:
       - name: Build And Deploy
         id: builddeploy
         uses: Azure/static-web-apps-deploy@v1
+        env:
+          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+          NEXT_PUBLIC_WEBSOCKET_URL: ${{ secrets.NEXT_PUBLIC_WEBSOCKET_URL }}
+          NEXT_PUBLIC_WS_URL: ${{ secrets.NEXT_PUBLIC_WS_URL }}
+
+          NEXT_PUBLIC_AUTH_LOGIN_PATH: ${{ secrets.NEXT_PUBLIC_AUTH_LOGIN_PATH }}
+          NEXT_PUBLIC_AUTH_REGISTER_PATH: ${{ secrets.NEXT_PUBLIC_AUTH_REGISTER_PATH }}
+          NEXT_PUBLIC_AUTH_REFRESH_PATH: ${{ secrets.NEXT_PUBLIC_AUTH_REFRESH_PATH }}
+
+          NEXT_PUBLIC_DISABLE_AUTH: ${{ secrets.NEXT_PUBLIC_DISABLE_AUTH }}
+          NEXT_PUBLIC_CHAT_MOCK: ${{ secrets.NEXT_PUBLIC_CHAT_MOCK }}
+          NEXT_PUBLIC_AUTO_ASSIGN: ${{ secrets.NEXT_PUBLIC_AUTO_ASSIGN }}
+          NEXT_PUBLIC_MAX_ACTIVE: ${{ secrets.NEXT_PUBLIC_MAX_ACTIVE }}
+          NEXT_PUBLIC_FORCE_ASSIGN_ON_BOOT: ${{ secrets.NEXT_PUBLIC_FORCE_ASSIGN_ON_BOOT }}
+          NEXT_PUBLIC_TRY_ASSIGN_WHEN_EMPTY: ${{ secrets.NEXT_PUBLIC_TRY_ASSIGN_WHEN_EMPTY }}
+          NEXT_PUBLIC_PHONE_DEFAULT_PREFIX: ${{ secrets.NEXT_PUBLIC_PHONE_DEFAULT_PREFIX }}
+
+          NEXT_PUBLIC_N8N_ENABLE: ${{ secrets.NEXT_PUBLIC_N8N_ENABLE }}
+          NEXT_PUBLIC_N8N_POLL_MS: ${{ secrets.NEXT_PUBLIC_N8N_POLL_MS }}
+
+          NEXT_PUBLIC_ECOM_BASE_URL: ${{ secrets.NEXT_PUBLIC_ECOM_BASE_URL }}
+          NEXT_PUBLIC_ECOM_CHATS_WITH_LAST_PATH: ${{ secrets.NEXT_PUBLIC_ECOM_CHATS_WITH_LAST_PATH }}
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_GREEN_GROUND_0B1EA061E }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
 
-          app_location: "/"                 
+          app_location: "/"
           app_build_command: "npm ci && npm run build"
-          app_artifact_location: ".next"    
-          api_location: ""                  
-      
+          app_artifact_location: ".next"
+          api_location: ""
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
